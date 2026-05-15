@@ -64,8 +64,21 @@ export function computeCapPrice(s: Partial<StoreData>): number {
     return 0; // "Call for Pricing" state
   }
 
-  // TODO: replace with bracket+adjuster matrix once client confirms manufacturer rules
-  return (w + l) * ((PRICING as any)?.placeholder_multiplier || 10);
+  // STEP 1 — base cost (STUB until manufacturer bracket+adjuster rules are confirmed).
+  // TODO: replace `(w + l) * 10` with the real cost model.
+  const baseCost = (w + l) * ((PRICING as any)?.placeholder_multiplier || 10);
+
+  // STEP 2 — multiply by Kaminos Margin from the Google Sheet ("Cap configurator" block, H/I).
+  // The sheet value "300%" is normalized to 3.0 (see normalizeMarginRate in utils/pricing.ts),
+  // so a 300% margin produces a final price of cost × 3.0.
+  // When the sheet is unreachable (MARGIN_RATE falls back to 0), treat as 1.0 (no markup) so
+  // we never accidentally show $0.
+  const marginMultiplier =
+    Number.isFinite(PRICING.MARGIN_RATE) && PRICING.MARGIN_RATE > 0
+      ? PRICING.MARGIN_RATE
+      : 1;
+
+  return baseCost * marginMultiplier;
 }
 
 const initial: StoreData = {
