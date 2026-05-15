@@ -471,29 +471,7 @@ export function buildCap(capRoot: THREE.Group, config: CapConfig) {
   const pitchHeight = (shortSide / 2) * (config.lid_pitch / 12) * SC; // based on short side!
   const pitchDrop = oh * (config.lid_pitch / 12); // drop at the overhang
   
-  const tabWidth = 0.75 * SC; // How far the folded corner tab extends
-  const tOffset = 0.05 * SC;  // Visual offset to show the material overlap
   const lipDrop = 0.5 * SC;
-  const flatBand = 0.75 * SC; // Flat horizontal band at edge
-
-  function buildFlapGeometry(P: number[][], E: number[][], offset: number[]) {
-    const verts: number[] = [];
-    function addQuad(p1: number[], p2: number[], p3: number[], p4: number[]) {
-      verts.push(...p1, ...p2, ...p3, ...p1, ...p3, ...p4);
-    }
-    const P_off = P.map(p => [p[0] + offset[0], p[1] + offset[1], p[2] + offset[2]]);
-    const E_off = E.map(p => [p[0] + offset[0], p[1] + offset[1], p[2] + offset[2]]);
-
-    for (let i = 0; i < P.length - 1; i++) {
-      addQuad(P_off[i], P_off[i+1], E_off[i+1], E_off[i]); // Main face
-      addQuad(P[i], P[i+1], P_off[i+1], P_off[i]); // Crease
-      addQuad(E[i], E_off[i], E_off[i+1], E[i+1]); // Edge
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
-    geo.computeVertexNormals();
-    return geo;
-  }
 
   // -- Flat Lid --
   const lidFlat = new THREE.Group();
@@ -524,18 +502,6 @@ export function buildCap(capRoot: THREE.Group, config: CapConfig) {
   const iNE = [ hw, innerY, -hl];
   const iSE = [ hw, innerY,  hl];
   const iSW = [-hw, innerY,  hl];
-  
-  // Slope-end corners (where slope meets hem)
-  const sNW = [-hw_s, outerY, -hl_s];
-  const sNE = [ hw_s, outerY, -hl_s];
-  const sSE = [ hw_s, outerY,  hl_s];
-  const sSW = [-hw_s, outerY,  hl_s];
-
-  // Outer corners
-  const oNW = [-hw_o, outerY, -hl_o];
-  const oNE = [ hw_o, outerY, -hl_o];
-  const oSE = [ hw_o, outerY,  hl_o];
-  const oSW = [-hw_o, outerY,  hl_o];
 
   // --- Top Face ---
   const topFaceVerts: number[] = [];
