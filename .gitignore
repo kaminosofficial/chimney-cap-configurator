@@ -35,5 +35,3 @@ Thumbs.db
 *.tmp
 .tmp/
 .cache/
-
-.vercel

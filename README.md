@@ -1,73 +1,50 @@
-# React + TypeScript + Vite
+# Kaminos Multi-Flue Chimney Cap Configurator
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+3D parametric configurator for Kaminos multi-flue chimney caps. Users pick mount style, lid type, dimensions, gauge/material, and finish; the 3D model updates in real time and the price is computed from a Google Sheet. Hosted on Vercel and embeddable into Shopify via a single IIFE bundle.
 
-Currently, two official plugins are available:
+**Live:** https://chimney-cap-configurator.vercel.app
+**Repo:** https://github.com/kaminosofficial/chimney-cap-configurator
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+This project was forked from the chase cover configurator and reskinned around the cap model (`CapModel` / `CapViewer`, `configStore.computeCapPrice`). The original chase cover lives at https://chase-cover-configurator.vercel.app — it is a **separate Vercel project** and is not touched by this repo's deploys.
 
-## React Compiler
+---
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Tech stack
 
-## Expanding the ESLint configuration
+- React 19 + TypeScript + Vite 7
+- Zustand (client state)
+- React Three Fiber + Three.js (3D)
+- Vercel serverless functions (API + Shopify variant cart flow)
+- Google Sheets (live pricing)
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Quickstart
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev          # http://localhost:5173
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Build targets:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+| Command | Output |
+|---|---|
+| `npm run build` | `dist/` — standalone SPA |
+| `npm run build:shopify` | `dist-shopify/chase-cover-configurator.iife.js` — Shopify IIFE bundle (filename kept for backwards-compat with the existing Shopify embed) |
+| `npm run build:vercel` | both of the above, copied into `dist/` for Vercel |
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Deploy
+
+```bash
+vercel deploy --prod --scope kaminos-official-s-projects
 ```
+
+GitHub→Vercel auto-deploy is not wired up yet — see "GitHub → Vercel auto-deploy" in [AGENTS.md](AGENTS.md) (or [claude.md](claude.md)) for the manual deploy steps and the env-var setup checklist.
+
+## Pricing
+
+Price = `(width + length) × placeholder_multiplier × MARGIN_RATE` (with copper / custom dims falling back to a "Call for Pricing" state). The `MARGIN_RATE` is read from the **"Cap configurator"** block (columns H/I) of the pricing Google Sheet — sheet value `300%` is normalized to `3.0` on the server. Full details: [AGENTS.md → Cap Pricing](AGENTS.md#cap-pricing).
+
+## Docs
+
+- [AGENTS.md](AGENTS.md) / [claude.md](claude.md) — full project documentation (architecture, build, Shopify, pricing)
+- [SHOPIFY-INTEGRATION-GUIDE.md](SHOPIFY-INTEGRATION-GUIDE.md) — step-by-step Shopify embed + auth setup

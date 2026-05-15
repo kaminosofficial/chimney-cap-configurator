@@ -7,6 +7,8 @@ import {
 
 export interface PricingConstants extends PricingLike {
     STORM_COLLAR_PRICES: Record<number, number>;
+    /** STUB: per-inch base-cost multiplier for the cap price formula (see configStore.computeCapPrice). */
+    placeholder_multiplier?: number;
 }
 
 // Default values (used as fallback and for local dev)

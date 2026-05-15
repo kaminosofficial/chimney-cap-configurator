@@ -1,4 +1,16 @@
-# Chase Cover Configurator — Project Documentation
+# Kaminos Configurators — Project Documentation
+
+> ## ⚠️ This repo is the **Multi-Flue Chimney Cap Configurator**
+>
+> Forked from the Chase Cover Configurator, reskinned around the cap model (`CapModel`, `CapViewer`, `Inputs.tsx`, `configStore.computeCapPrice`). Sections below were written for the original chase cover; cap-specific behavior is called out in the **Cap Pricing**, **Project URLs & Repos**, and **Key Decisions & History** sections.
+>
+> | | |
+> |---|---|
+> | **Cap live URL (this project)** | https://chimney-cap-configurator.vercel.app |
+> | **Cap GitHub** | https://github.com/kaminosofficial/chimney-cap-configurator |
+> | **Cap Vercel project** | `chimney-cap-configurator` (team `kaminos-official-s-projects`) |
+> | **Chase cover live URL (separate, unaffected)** | https://chase-cover-configurator.vercel.app |
+> | **Chase cover Vercel project** | `chase-cover-configurator` (same team — do **not** deploy this repo to it) |
 
 ## Overview
 
@@ -8,7 +20,8 @@ This is a 3D chase cover configurator built for **Kaminos**. Users configure cus
 
 **Hosting**: Vercel (serverless functions + static assets + Shopify IIFE bundle)
 
-**Live URL**: `https://chase-cover-configurator.vercel.app`
+**Live URL (chimney cap, this repo)**: `https://chimney-cap-configurator.vercel.app`
+**Live URL (chase cover, separate project)**: `https://chase-cover-configurator.vercel.app`
 
 ---
 
@@ -312,7 +325,9 @@ When remote pricing loads, the Zustand store's `onPricingLoaded` callback trigge
 
 ### Google Sheet Structure
 
-The sheet uses a key-value format with rows like:
+The sheet uses a key-value format. The parser walks every row and picks up adjacent-column `(key, value)` pairs — meaning multiple key-value blocks can coexist on the same sheet at different column offsets.
+
+**Chase block (columns A/B in the current sheet)** — chase cover pricing:
 
 | Key prefix | Example | Description |
 |------------|---------|-------------|
@@ -326,6 +341,13 @@ The sheet uses a key-value format with rows like:
 | `MAT_*` | MAT_galvanized=1.0, MAT_copper=3.0 | Material multipliers |
 | `SC_*` | SC_40=30, SC_100=60 | Storm collar prices by size (tenths of inches) |
 | `COEF_*` | varies | Model coefficients |
+| `Kaminos Margin` | 300% | Markup applied to base cost — normalized to `MARGIN_RATE` (300% → 3.0). Used by `computePricingBreakdown` as `× (1 + rate)` (chase) and by `computeCapPrice` as `× rate` (cap, see **Cap Pricing** below). |
+
+**Cap-configurator block (columns H/I in the current sheet)** — chimney cap pricing:
+
+| Key | Example | Description |
+|-----|---------|-------------|
+| `Kaminos Margin` | 300% | Same key as the chase block; whichever row the parser sees last wins (currently both = 300%, so the value is the same). To set a different margin for the cap, rename this cell to `Cap Margin` and add a `CAP_MARGIN_RATE` field in `lib/pricing-sheet.ts` that overrides `MARGIN_RATE` in `computeCapPrice` only. |
 
 Changes take effect within **5 minutes** (server cache TTL). No code changes or redeployment needed.
 
@@ -333,15 +355,57 @@ Changes take effect within **5 minutes** (server cache TTL). No code changes or 
 
 ## Pricing Formula
 
+### Chase cover (historical — see the chase repo)
+
 **Files**: `src/utils/pricing.ts` (shared) + `store/configStore.ts` (client) + `api/add-to-cart.ts` (server)
 
-The pricing formula is implemented in `computePricingBreakdown()` which is shared between client and server. See `src/utils/pricing.ts` for the full implementation.
+The pricing formula is implemented in `computePricingBreakdown()` which is shared between client and server. See `src/utils/pricing.ts` for the full implementation. Margin is applied as `total = preMarginCost × (1 + MARGIN_RATE)` — i.e. sheet value `300%` produces a 4× markup.
 
 **Powder coat**: Charged only when `pc === true && mat !== 'copper'`. When copper is selected, powder coat state is preserved in the store but the charge and color swatch are not applied.
 
 **Gauge multipliers**: 24ga=1.0, 20ga=1.3, 18ga=1.4, 16ga=1.6, 14ga=1.8, 12ga=2.7, 10ga=3.4
 
 **Material multipliers**: Galvanized=1.0, Copper=3.0
+
+### Cap Pricing
+
+**File**: `src/store/configStore.ts` → `computeCapPrice(s)`. The chase `computePricingBreakdown` is **not** called for the cap — the cap currently uses its own stub formula.
+
+**Step 0 — Call-for-pricing guards (return `0`):**
+
+| Condition | Reason |
+|---|---|
+| `material === 'copper'` | Quoted manually |
+| `screen_height > 24"` | Out of standard range |
+| `width ≤ 0` or `width > 65"` | Out of standard range |
+| `length ≤ 0` or `length > 100"` | Out of standard range |
+
+A return value of `0` makes `PriceDisplay` show "Call for Pricing" instead of `$0.00`.
+
+**Step 1 — Base cost (STUB):**
+
+```ts
+baseCost = (width + length) × (PRICING.placeholder_multiplier ?? 10)
+```
+
+`placeholder_multiplier` is a typed optional on `PricingConstants` — currently not driven from the sheet, so the literal `10` is used. Defaults (W=24, L=36) → `baseCost = $600`. **TODO**: replace with the real bracket+adjuster matrix once the manufacturer rules are confirmed.
+
+**Step 2 — Kaminos margin (multiplier, not markup):**
+
+```ts
+marginMultiplier = PRICING.MARGIN_RATE > 0 ? PRICING.MARGIN_RATE : 1
+finalPrice = baseCost × marginMultiplier
+```
+
+- `MARGIN_RATE` is read from the **Cap configurator** block of the Google Sheet (cell H3/I3 → `"Kaminos Margin" = 300%`) and normalized server-side by `normalizeMarginRate` in `lib/pricing-sheet.ts:187` (`300%` → `3.0`).
+- **Multiplier semantics**: `cost × rate`, **not** `cost × (1 + rate)`. So `300%` produces a final price of `cost × 3.0` (= `$1,800` on the default config). This intentionally differs from chase pricing, which uses markup semantics.
+- **Fallback**: if the sheet is unreachable, `MARGIN_RATE` falls through to its hardcoded default of `0`. The `> 0 ? rate : 1` guard turns that into `× 1` (no markup) so the configurator never shows `$0`.
+
+**Recompute triggers:**
+- Every Zustand `set(...)` call recomputes the price (gated — see below).
+- The `onPricingLoaded` callback at the bottom of `configStore.ts` fires once when `/api/pricing` resolves, recomputing with the live `MARGIN_RATE`.
+
+**Render-gating:** the reducer only writes `price` into store state when it actually changed (`nextPrice === state.price ? skip : write`). This stops `PriceDisplay` (and anything else subscribed to `price`) from re-rendering on unrelated mutations such as `notes` typing or `orbitEnabled` toggling.
 
 ---
 
@@ -690,6 +754,9 @@ API handlers log warnings for requests from unknown origins via `warnUnknownOrig
 
 ## Key Decisions & History
 
+- **Chimney cap fork**: This repo is the cap fork of the chase cover configurator. Deployed to its own Vercel project (`chimney-cap-configurator`) and GitHub repo (`kaminosofficial/chimney-cap-configurator`) — the chase cover deployment at `chase-cover-configurator.vercel.app` is a separate project on the same Vercel team and is **not** touched by this repo's pipeline. GitHub→Vercel auto-deploy is currently NOT wired up (the Vercel GitHub App couldn't connect to the `kaminosofficial` repo during `vercel link`); deploys are manual via `vercel deploy --prod`.
+- **Cap pricing — multiplier semantics**: `computeCapPrice` uses `cost × MARGIN_RATE` (multiplier), not `cost × (1 + MARGIN_RATE)` (markup, which is how chase pricing works). Sheet value `300%` therefore produces a `× 3.0` final price for the cap and a `× 4.0` final price for the chase. A fallback of `× 1.0` is applied when the sheet is unreachable so the cap never shows `$0`. See **Cap Pricing** for details.
+- **Hip / hip_ridge geometry**: `createHipGeometry` in `src/utils/geometry.ts` builds the lid as four (hip) or six (hip_ridge) triangles using `addTri` / `addQuad` helpers, plus vertical drip lips on all four edges. Standing seam reuses the ridge geometry and overlays raised seams (`addRaisedSeam`) along the four hip ridges and the top ridge, plus rib boxes spaced by `config.seam_count` per slope.
 - **Variant-based cart flow**: The primary cart flow uses Shopify product variants (not Draft Orders). Each config creates a deterministic variant on a single product. This integrates naturally with Shopify's cart, checkout, and order system.
 - **Shopify auth**: `client_credentials` fails when app org ≠ store org. Use static `SHOPIFY_ACCESS_TOKEN` from a **Store Admin custom app** (created in the client store's Admin > Settings > Apps > Develop apps). Auth is shared via `lib/shopify-auth.ts`.
 - **CSS isolation**: Shadow DOM used for Shopify embedding. `globals-scoped.css` is auto-synced from `globals.css` via a pre-build script — only ever edit `globals.css`.

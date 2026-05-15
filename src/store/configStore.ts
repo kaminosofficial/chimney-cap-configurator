@@ -64,20 +64,13 @@ export function computeCapPrice(s: Partial<StoreData>): number {
     return 0; // "Call for Pricing" state
   }
 
-  // STEP 1 — base cost (STUB until manufacturer bracket+adjuster rules are confirmed).
-  // TODO: replace `(w + l) * 10` with the real cost model.
-  const baseCost = (w + l) * ((PRICING as any)?.placeholder_multiplier || 10);
+  // TODO: replace `(w + l) * 10` with the real bracket+adjuster cost model.
+  const baseCost = (w + l) * (PRICING.placeholder_multiplier ?? 10);
 
-  // STEP 2 — multiply by Kaminos Margin from the Google Sheet ("Cap configurator" block, H/I).
-  // The sheet value "300%" is normalized to 3.0 (see normalizeMarginRate in utils/pricing.ts),
-  // so a 300% margin produces a final price of cost × 3.0.
-  // When the sheet is unreachable (MARGIN_RATE falls back to 0), treat as 1.0 (no markup) so
-  // we never accidentally show $0.
-  const marginMultiplier =
-    Number.isFinite(PRICING.MARGIN_RATE) && PRICING.MARGIN_RATE > 0
-      ? PRICING.MARGIN_RATE
-      : 1;
-
+  // MARGIN_RATE comes from the Google Sheet "Cap configurator" block (H/I), normalized by
+  // normalizeMarginRate (utils/pricing.ts) — sheet "300%" arrives here as 3.0. Fallback to 1.0
+  // when the sheet is unreachable (rate=0) so we never display $0.
+  const marginMultiplier = PRICING.MARGIN_RATE > 0 ? PRICING.MARGIN_RATE : 1;
   return baseCost * marginMultiplier;
 }
 
@@ -156,15 +149,19 @@ export const useConfigStore = create<CapConfig>()(
   (set) => ({
     ...initial,
     set: (partial) => set(state => {
-      // Auto-correct overhang if lid changes
-      let overrides: Partial<CapConfig> = {};
       // Auto-disable powder coat if copper
-      if (partial.material === 'copper') {
-        overrides.powder_coat = false;
-      }
+      const overrides: Partial<CapConfig> = partial.material === 'copper'
+        ? { powder_coat: false }
+        : {};
 
       const next = { ...state, ...partial, ...overrides };
-      return { ...partial, ...overrides, price: computeCapPrice(next) };
+      const nextPrice = computeCapPrice(next);
+      // Only include `price` in the patch when it actually changed, so PriceDisplay (and
+      // anything else subscribed to `price`) doesn't re-render on unrelated mutations like
+      // notes-typing or orbitEnabled toggles.
+      return nextPrice === state.price
+        ? { ...partial, ...overrides }
+        : { ...partial, ...overrides, price: nextPrice };
     }),
     setOrbitEnabled: (v: boolean) => set({ orbitEnabled: v }),
   })
