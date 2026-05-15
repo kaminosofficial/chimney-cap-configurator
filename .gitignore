@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-shopify/
+
+# Environment & secrets (NEVER commit)
+.env
+.env.local
+.env.*.local
+.env.vercel
+.env.production
+.env.development
+
+# Vercel link metadata (project-specific, regenerated on `vercel link`)
+.vercel/
+
+# Logs
+logs/
+*.log
+build_output.log
+tsc_errors.txt
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Agent-only working files
+.claude/
+
+# Temp / cache
+*.tmp
+.tmp/
+.cache/
