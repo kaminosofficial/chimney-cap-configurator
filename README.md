@@ -42,7 +42,7 @@ GitHub→Vercel auto-deploy is not wired up yet — see "GitHub → Vercel auto-
 
 ## Pricing
 
-Price = `(width + length) × placeholder_multiplier × MARGIN_RATE` (with copper / custom dims falling back to a "Call for Pricing" state). The `MARGIN_RATE` is read from the **"Cap configurator"** block (columns H/I) of the pricing Google Sheet — sheet value `300%` is normalized to `3.0` on the server. Full details: [AGENTS.md → Cap Pricing](AGENTS.md#cap-pricing).
+Price = `(width + length) × multiplier × MATERIAL_MULT × surcharges × MARGIN_RATE`, where the **multiplier** comes from a 24-row matrix (3 mounts × 4 lids × 2 size brackets) defined in the **"Cap configurator"** block (columns H/I) of the pricing Google Sheet. Surcharges (steep pitch, tall skirt, extra overhang, tall screen) and bracket dimension thresholds are also editable from the sheet. Every input combination produces a numeric price — there is no "Call for Pricing" state. Full details and the live multiplier matrix: [AGENTS.md → Cap Pricing](AGENTS.md#cap-pricing).
 
 ## Docs
 

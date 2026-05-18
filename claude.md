@@ -343,11 +343,18 @@ The sheet uses a key-value format. The parser walks every row and picks up adjac
 | `COEF_*` | varies | Model coefficients |
 | `Kaminos Margin` | 300% | Markup applied to base cost — normalized to `MARGIN_RATE` (300% → 3.0). Used by `computePricingBreakdown` as `× (1 + rate)` (chase) and by `computeCapPrice` as `× rate` (cap, see **Cap Pricing** below). |
 
-**Cap-configurator block (columns H/I in the current sheet)** — chimney cap pricing:
+**Cap-configurator block (columns H/I in the current sheet)** — chimney cap pricing. Live values from the sheet override the hardcoded defaults in `lib/pricing-sheet.ts` (server) and `src/config/pricing.ts` (client).
 
-| Key | Example | Description |
-|-----|---------|-------------|
-| `Kaminos Margin` | 300% | Same key as the chase block; whichever row the parser sees last wins (currently both = 300%, so the value is the same). To set a different margin for the cap, rename this cell to `Cap Margin` and add a `CAP_MARGIN_RATE` field in `lib/pricing-sheet.ts` that overrides `MARGIN_RATE` in `computeCapPrice` only. |
+| Key                                       | Example | Description |
+|-------------------------------------------|---------|-------------|
+| `Kaminos Margin`                          | 300%    | Multiplier (not markup) applied as the final step. `300%` → `MARGIN_RATE` = 3.0 → final price = cost × 3. |
+| `MULT_<MOUNT>_<LID>_<BRACKET>`            | 6.47    | Cap base multiplier. 24 keys total: 3 mounts × 4 lids × 2 brackets. Mount ∈ `{SKIRT, PITCHED_SKIRT, TOP_MOUNT}`, Lid ∈ `{FLAT, HIP, HIP_RIDGE, STANDING_SEAM}`, Bracket ∈ `{SMALL, LARGE}`. Example: `MULT_SKIRT_FLAT_SMALL = 6.47`. |
+| `BRACKET_FLAT_W_MAX` / `BRACKET_FLAT_L_MAX` | 33 / 67 | Small-bracket dimension caps for the **flat** lid. Bracket = `small` only when BOTH `W ≤ w_max` AND `L ≤ l_max`; otherwise `large` (no upper cap). |
+| `BRACKET_NON_FLAT_W_MAX` / `BRACKET_NON_FLAT_L_MAX` | 45 / 67 | Same as above for hip / hip+ridge / standing seam. |
+| `CAP_STEEP_PITCH_PCT` / `CAP_STEEP_PITCH_THRESHOLD` | 10% / 5 | Surcharge when `lid_pitch > threshold`. PDF rule: "ADD 10% FOR LID PITCH 6/12 TO 12/12". |
+| `CAP_TALL_SKIRT_PCT` / `CAP_TALL_SKIRT_THRESHOLD` | 5% / 4 | Surcharge when `vertical_skirt > threshold` (skirt + pitched-skirt mounts only; Top Mount has no skirt). PDF rule: "Skirts 5–8" add 5%". |
+| `CAP_EXTRA_OVERHANG_PCT` / `CAP_STD_OVERHANG_FLAT` / `CAP_STD_OVERHANG_NON_FLAT` | 10% / 3 / 4 | Surcharge when `lid_overhang > std` (3 for flat, 4 for non-flat). PDF rule: "Add 10% for Extra Overhang up to 6"". |
+| `CAP_TALL_SCREEN_PCT` / `CAP_TALL_SCREEN_THRESHOLD` | 5% / 16 | Surcharge when `screen_height > threshold` (any height ≥ 17", **no upper cap** — replaces the PDF's > 24" Call-for-Pricing rule). |
 
 Changes take effect within **5 minutes** (server cache TTL). No code changes or redeployment needed.
 
@@ -369,43 +376,67 @@ The pricing formula is implemented in `computePricingBreakdown()` which is share
 
 ### Cap Pricing
 
-**File**: `src/store/configStore.ts` → `computeCapPrice(s)`. The chase `computePricingBreakdown` is **not** called for the cap — the cap currently uses its own stub formula.
+**File**: `src/store/configStore.ts` → `computeCapPrice(s)`. The chase `computePricingBreakdown` is **not** called for the cap — it has its own pipeline. All multipliers, bracket thresholds, and surcharge percentages are driven from the **Cap configurator** block (columns H/I) of the Google Sheet; the defaults in `lib/pricing-sheet.ts` / `src/config/pricing.ts` mirror the National Chimney 4/17/2023 PDFs and act as fallbacks when the sheet is unreachable.
 
-**Step 0 — Call-for-pricing guards (return `0`):**
+**No Call-for-Pricing state.** Every input combination (including copper, screens > 24", and W/L beyond the printed price-sheet ranges) produces a numeric price. The `PriceDisplay` "Call for Pricing" branch has been deleted as unreachable.
 
-| Condition | Reason |
-|---|---|
-| `material === 'copper'` | Quoted manually |
-| `screen_height > 24"` | Out of standard range |
-| `width ≤ 0` or `width > 65"` | Out of standard range |
-| `length ≤ 0` or `length > 100"` | Out of standard range |
+**Pipeline:**
 
-A return value of `0` makes `PriceDisplay` show "Call for Pricing" instead of `$0.00`.
-
-**Step 1 — Base cost (STUB):**
-
-```ts
-baseCost = (width + length) × (PRICING.placeholder_multiplier ?? 10)
+```
+cost = (width + length) × MULT[<mount>_<lid_type>_<bracket>]
+     × MATERIAL_MULT[material]
+     × (1 + steep_pitch_pct)         if lid_pitch > steep_pitch_threshold
+     × (1 + tall_skirt_pct)          if vertical_skirt > tall_skirt_threshold && mount !== 'top_mount'
+     × (1 + extra_overhang_pct)      if lid_overhang > {std_overhang_flat | std_overhang_non_flat}
+     × (1 + tall_screen_pct)         if screen_height > tall_screen_threshold
+     × PAINTED_MULTIPLIER            if powder_coat && material !== 'copper'
+finalPrice = cost × MARGIN_RATE        (multiplier semantics; fallback × 1 when sheet unreachable)
 ```
 
-`placeholder_multiplier` is a typed optional on `PricingConstants` — currently not driven from the sheet, so the literal `10` is used. Defaults (W=24, L=36) → `baseCost = $600`. **TODO**: replace with the real bracket+adjuster matrix once the manufacturer rules are confirmed.
+**Bracket selection** — `small` only when BOTH dims fit the bracket caps; `large` otherwise (no upper cap, no auto-Call-for-Pricing).
 
-**Step 2 — Kaminos margin (multiplier, not markup):**
+| Lid | Small bracket | Large bracket |
+|---|---|---|
+| `flat` | W ≤ 33 AND L ≤ 67 | otherwise |
+| `hip` / `hip_ridge` / `standing_seam` | W ≤ 45 AND L ≤ 67 | otherwise |
 
-```ts
-marginMultiplier = PRICING.MARGIN_RATE > 0 ? PRICING.MARGIN_RATE : 1
-finalPrice = baseCost × marginMultiplier
-```
+**Multiplier matrix (PDF 4/17/2023):**
 
-- `MARGIN_RATE` is read from the **Cap configurator** block of the Google Sheet (cell H3/I3 → `"Kaminos Margin" = 300%`) and normalized server-side by `normalizeMarginRate` in `lib/pricing-sheet.ts:187` (`300%` → `3.0`).
-- **Multiplier semantics**: `cost × rate`, **not** `cost × (1 + rate)`. So `300%` produces a final price of `cost × 3.0` (= `$1,800` on the default config). This intentionally differs from chase pricing, which uses markup semantics.
-- **Fallback**: if the sheet is unreachable, `MARGIN_RATE` falls through to its hardcoded default of `0`. The `> 0 ? rate : 1` guard turns that into `× 1` (no markup) so the configurator never shows `$0`.
+| Mount | Lid | Small | Large |
+|---|---|---|---|
+| `skirt` | `flat` | 6.47 | 8.09 |
+| `skirt` | `hip_ridge` | 9.03 | 11.29 |
+| `skirt` | `hip` | 9.39 | 11.73 |
+| `skirt` | `standing_seam` | 12.17 | 15.21 |
+| `pitched_skirt` | `flat` | 7.64 | 9.56 |
+| `pitched_skirt` | `hip_ridge` | 9.40 | 11.75 |
+| `pitched_skirt` | `hip` | 10.07 | 12.59 |
+| `pitched_skirt` | `standing_seam` | 12.50 | 15.63 |
+| `top_mount` | `flat` | 4.91 | 6.14 |
+| `top_mount` | `hip_ridge` | 7.98 | 9.98 |
+| `top_mount` | `hip` | 8.68 | 10.85 |
+| `top_mount` | `standing_seam` | 8.70 | 10.88 |
+
+**Surcharges / material factors (cumulative multiplicative):**
+
+| Trigger | Effect | Sheet keys |
+|---|---|---|
+| `lid_pitch > 5` | × 1.10 | `CAP_STEEP_PITCH_PCT`, `CAP_STEEP_PITCH_THRESHOLD` |
+| `vertical_skirt > 4` (non-Top-Mount) | × 1.05 | `CAP_TALL_SKIRT_PCT`, `CAP_TALL_SKIRT_THRESHOLD` |
+| `lid_overhang > std` (3 flat / 4 non-flat) | × 1.10 | `CAP_EXTRA_OVERHANG_PCT`, `CAP_STD_OVERHANG_FLAT`, `CAP_STD_OVERHANG_NON_FLAT` |
+| `screen_height > 16` (any height 17"+) | × 1.05 | `CAP_TALL_SCREEN_PCT`, `CAP_TALL_SCREEN_THRESHOLD` |
+| `material === 'copper'` | × `MATERIAL_MULT.copper` (= 3.0 from sheet) | `copper / 3` (chase block) |
+| `powder_coat && material !== 'copper'` | × `PAINTED_MULTIPLIER` (= 1.5) | `powdercoat / 1.5` (chase block, shared) |
+
+**Kaminos margin** — multiplier semantics: `cost × MARGIN_RATE`, **not** `cost × (1 + MARGIN_RATE)`. Sheet `"300%"` is normalized server-side to 3.0; final price = cost × 3.0. Fallback to × 1.0 when the sheet is unreachable (`MARGIN_RATE = 0` default) so the configurator never shows `$0`.
 
 **Recompute triggers:**
 - Every Zustand `set(...)` call recomputes the price (gated — see below).
-- The `onPricingLoaded` callback at the bottom of `configStore.ts` fires once when `/api/pricing` resolves, recomputing with the live `MARGIN_RATE`.
+- The `onPricingLoaded` callback at the bottom of `configStore.ts` fires once when `/api/pricing` resolves, recomputing with the live sheet values.
 
 **Render-gating:** the reducer only writes `price` into store state when it actually changed (`nextPrice === state.price ? skip : write`). This stops `PriceDisplay` (and anything else subscribed to `price`) from re-rendering on unrelated mutations such as `notes` typing or `orbitEnabled` toggling.
+
+**Editing prices without redeploy:** change any cell in the H/I "Cap configurator" block of the Google Sheet — server cache TTL is 2 minutes, so live prices update within ~2 minutes of saving. No code change, no redeploy.
 
 ---
 
@@ -755,7 +786,9 @@ API handlers log warnings for requests from unknown origins via `warnUnknownOrig
 ## Key Decisions & History
 
 - **Chimney cap fork**: This repo is the cap fork of the chase cover configurator. Deployed to its own Vercel project (`chimney-cap-configurator`) and GitHub repo (`kaminosofficial/chimney-cap-configurator`) — the chase cover deployment at `chase-cover-configurator.vercel.app` is a separate project on the same Vercel team and is **not** touched by this repo's pipeline. GitHub→Vercel auto-deploy is currently NOT wired up (the Vercel GitHub App couldn't connect to the `kaminosofficial` repo during `vercel link`); deploys are manual via `vercel deploy --prod`.
-- **Cap pricing — multiplier semantics**: `computeCapPrice` uses `cost × MARGIN_RATE` (multiplier), not `cost × (1 + MARGIN_RATE)` (markup, which is how chase pricing works). Sheet value `300%` therefore produces a `× 3.0` final price for the cap and a `× 4.0` final price for the chase. A fallback of `× 1.0` is applied when the sheet is unreachable so the cap never shows `$0`. See **Cap Pricing** for details.
+- **Cap multipliers in the sheet**: `computeCapPrice` is fully sheet-driven. The 24 `MULT_<MOUNT>_<LID>_<BRACKET>` keys (3 mounts × 4 lids × 2 brackets), 4 `BRACKET_*` thresholds, and 9 surcharge / overhang-standard keys all live in the H/I "Cap configurator" block. Edits propagate within ~2 minutes (server cache TTL) with no redeploy. The large multiplier extends indefinitely past the printed price-sheet ranges (W > 65 or L > 100) per business decision.
+- **No Call-for-Pricing state on the cap**: every input combination produces a numeric price. Copper is priced at `× MATERIAL_MULT.copper` (3.0 from the sheet), screen heights > 24" keep the same +5% tall-screen surcharge with no escalation, and there is no width/length upper cap. The `PriceDisplay` "Call for Pricing" branch was deleted as unreachable code.
+- **Cap margin — multiplier semantics**: `computeCapPrice` uses `cost × MARGIN_RATE` (multiplier), not `cost × (1 + MARGIN_RATE)` (markup, which is how chase pricing works). Sheet value `300%` therefore produces a `× 3.0` final price for the cap and a `× 4.0` final price for the chase. A fallback of `× 1.0` is applied when the sheet is unreachable so the cap never shows `$0`. See **Cap Pricing** for details.
 - **Hip / hip_ridge geometry**: `createHipGeometry` in `src/utils/geometry.ts` builds the lid as four (hip) or six (hip_ridge) triangles using `addTri` / `addQuad` helpers, plus vertical drip lips on all four edges. Standing seam reuses the ridge geometry and overlays raised seams (`addRaisedSeam`) along the four hip ridges and the top ridge, plus rib boxes spaced by `config.seam_count` per slope.
 - **Variant-based cart flow**: The primary cart flow uses Shopify product variants (not Draft Orders). Each config creates a deterministic variant on a single product. This integrates naturally with Shopify's cart, checkout, and order system.
 - **Shopify auth**: `client_credentials` fails when app org ≠ store org. Use static `SHOPIFY_ACCESS_TOKEN` from a **Store Admin custom app** (created in the client store's Admin > Settings > Apps > Develop apps). Auth is shared via `lib/shopify-auth.ts`.

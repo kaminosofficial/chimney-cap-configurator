@@ -212,6 +212,12 @@ export function normalizeMarginRate(value: number): number {
   return value;
 }
 
+/** "10%" (sheet-formatted) → 10 → 0.10. Decimals ≤ 1 pass through. Negatives → 0. */
+export function normalizeSurchargePct(value: number): number {
+  if (!Number.isFinite(value) || value < 0) return 0;
+  return value > 1 ? value / 100 : value;
+}
+
 export function computeBasePanelPrice(w: number, l: number, pricing: PricingLike): number {
   if (!Number.isFinite(w) || !Number.isFinite(l) || w <= 0 || l <= 0) return 0;
 

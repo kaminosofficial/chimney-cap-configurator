@@ -52,26 +52,41 @@ export interface CapConfig {
 
 type StoreData = Omit<CapConfig, 'set' | 'setOrbitEnabled'>;
 
-// Stub pricing until client confirms manufacturer rules
+// Cap pricing pipeline (sheet-driven; no Call-for-Pricing branches — every input produces a price).
+//   1. base = (w + l) × MULT[mount_lid_bracket]                         (PDF 4/17/2023 multipliers)
+//   2. × MATERIAL_MULT[material]                                        (copper = 3 from sheet)
+//   3. × surcharges (pitch / skirt / overhang / screen — all cumulative)
+//   4. × PAINTED_MULTIPLIER if powder_coat && !copper
+//   5. × MARGIN_RATE (Kaminos margin, multiplier semantics)
+// All thresholds and percentages live in the "Cap configurator" block (H/I) of the Google Sheet.
 export function computeCapPrice(s: Partial<StoreData>): number {
-  const isCopper = s.material === 'copper';
-  const customScreen = (s.screen_height || 10) > 24;
   const w = s.width || 24;
   const l = s.length || 36;
-  const customDimensions = w <= 0 || w > 65 || l <= 0 || l > 100;
+  const screen = s.screen_height || 10;
+  const mount = s.mount || 'skirt';
+  const lid_type = s.lid_type || 'flat';
+  const material = s.material || 'stainless';
 
-  if (isCopper || customScreen || customDimensions) {
-    return 0; // "Call for Pricing" state
-  }
+  // Bracket: small only if BOTH dimensions fit; large otherwise (no upper cap).
+  const bracketDims = lid_type === 'flat' ? PRICING.CAP_BRACKETS.flat : PRICING.CAP_BRACKETS.non_flat;
+  const bracket = w <= bracketDims.w_max && l <= bracketDims.l_max ? 'small' : 'large';
+  const multiplier = PRICING.CAP_MULTIPLIERS[`${mount}_${lid_type}_${bracket}`] ?? 1;
 
-  // TODO: replace `(w + l) * 10` with the real bracket+adjuster cost model.
-  const baseCost = (w + l) * (PRICING.placeholder_multiplier ?? 10);
+  let cost = (w + l) * multiplier;
+  cost *= PRICING.MATERIAL_MULT[material] ?? 1;
 
-  // MARGIN_RATE comes from the Google Sheet "Cap configurator" block (H/I), normalized by
-  // normalizeMarginRate (utils/pricing.ts) — sheet "300%" arrives here as 3.0. Fallback to 1.0
-  // when the sheet is unreachable (rate=0) so we never display $0.
+  const sur = PRICING.CAP_SURCHARGES;
+  if ((s.lid_pitch ?? 5) > sur.steep_pitch_threshold) cost *= 1 + sur.steep_pitch_pct;
+  if (mount !== 'top_mount' && (s.vertical_skirt ?? 3) > sur.tall_skirt_threshold) cost *= 1 + sur.tall_skirt_pct;
+  const stdOverhang = lid_type === 'flat' ? sur.std_overhang_flat : sur.std_overhang_non_flat;
+  if ((s.lid_overhang ?? stdOverhang) > stdOverhang) cost *= 1 + sur.extra_overhang_pct;
+  if (screen > sur.tall_screen_threshold) cost *= 1 + sur.tall_screen_pct;
+  if (s.powder_coat && material !== 'copper') cost *= PRICING.PAINTED_MULTIPLIER;
+
+  // Multiplier semantics (NOT 1 + rate): sheet "300%" → MARGIN_RATE = 3.0 → final = cost × 3.0.
+  // Fallback to ×1 when the sheet is unreachable so we never display $0.
   const marginMultiplier = PRICING.MARGIN_RATE > 0 ? PRICING.MARGIN_RATE : 1;
-  return baseCost * marginMultiplier;
+  return cost * marginMultiplier;
 }
 
 const initial: StoreData = {

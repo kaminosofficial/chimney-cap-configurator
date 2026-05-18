@@ -5,10 +5,29 @@ import {
     type PricingLike,
 } from '../utils/pricing.js';
 
+export interface CapBracket {
+    w_max: number;
+    l_max: number;
+}
+
+export interface CapSurcharges {
+    steep_pitch_pct: number;       // fraction, e.g. 0.10
+    steep_pitch_threshold: number; // lid_pitch /12
+    tall_skirt_pct: number;
+    tall_skirt_threshold: number;  // inches
+    extra_overhang_pct: number;
+    std_overhang_flat: number;     // inches
+    std_overhang_non_flat: number; // inches
+    tall_screen_pct: number;
+    tall_screen_threshold: number; // inches
+}
+
 export interface PricingConstants extends PricingLike {
     STORM_COLLAR_PRICES: Record<number, number>;
-    /** STUB: per-inch base-cost multiplier for the cap price formula (see configStore.computeCapPrice). */
-    placeholder_multiplier?: number;
+    /** Cap multipliers keyed `${mount}_${lid_type}_${bracket}` (lowercase). */
+    CAP_MULTIPLIERS: Record<string, number>;
+    CAP_BRACKETS: { flat: CapBracket; non_flat: CapBracket };
+    CAP_SURCHARGES: CapSurcharges;
 }
 
 // Default values (used as fallback and for local dev)
@@ -51,6 +70,49 @@ export let PRICING: PricingConstants = {
         260: 180,
         280: 200,
         290: 210,
+    },
+    // PDF "4/17/2023" defaults for the cap configurator. Live values come from the
+    // "Cap configurator" block (H/I) of the pricing sheet; these are the fallbacks.
+    CAP_MULTIPLIERS: {
+        skirt_flat_small: 6.47,
+        skirt_flat_large: 8.09,
+        skirt_hip_ridge_small: 9.03,
+        skirt_hip_ridge_large: 11.29,
+        skirt_hip_small: 9.39,
+        skirt_hip_large: 11.73,
+        skirt_standing_seam_small: 12.17,
+        skirt_standing_seam_large: 15.21,
+        pitched_skirt_flat_small: 7.64,
+        pitched_skirt_flat_large: 9.56,
+        pitched_skirt_hip_ridge_small: 9.40,
+        pitched_skirt_hip_ridge_large: 11.75,
+        pitched_skirt_hip_small: 10.07,
+        pitched_skirt_hip_large: 12.59,
+        pitched_skirt_standing_seam_small: 12.50,
+        pitched_skirt_standing_seam_large: 15.63,
+        top_mount_flat_small: 4.91,
+        top_mount_flat_large: 6.14,
+        top_mount_hip_ridge_small: 7.98,
+        top_mount_hip_ridge_large: 9.98,
+        top_mount_hip_small: 8.68,
+        top_mount_hip_large: 10.85,
+        top_mount_standing_seam_small: 8.70,
+        top_mount_standing_seam_large: 10.88,
+    },
+    CAP_BRACKETS: {
+        flat:     { w_max: 33, l_max: 67 },
+        non_flat: { w_max: 45, l_max: 67 },
+    },
+    CAP_SURCHARGES: {
+        steep_pitch_pct: 0.10,
+        steep_pitch_threshold: 5,
+        tall_skirt_pct: 0.05,
+        tall_skirt_threshold: 4,
+        extra_overhang_pct: 0.10,
+        std_overhang_flat: 3,
+        std_overhang_non_flat: 4,
+        tall_screen_pct: 0.05,
+        tall_screen_threshold: 16,
     },
 };
 
@@ -106,6 +168,9 @@ export async function loadPricingFromAPI(apiBase: string) {
                 MATERIAL_MULT: { ...PRICING.MATERIAL_MULT, ...(data.MATERIAL_MULT ?? {}) },
                 MODEL_COEFFICIENTS: { ...PRICING.MODEL_COEFFICIENTS, ...(data.MODEL_COEFFICIENTS ?? {}) },
                 STORM_COLLAR_PRICES: { ...PRICING.STORM_COLLAR_PRICES, ...(data.STORM_COLLAR_PRICES ?? {}) },
+                CAP_MULTIPLIERS: { ...PRICING.CAP_MULTIPLIERS, ...(data.CAP_MULTIPLIERS ?? {}) },
+                CAP_BRACKETS: data.CAP_BRACKETS ?? PRICING.CAP_BRACKETS,
+                CAP_SURCHARGES: { ...PRICING.CAP_SURCHARGES, ...(data.CAP_SURCHARGES ?? {}) },
             };
             _apiReachable = true;
             break;

@@ -4,13 +4,33 @@ import {
     DEFAULT_MODEL_COEFFICIENTS,
     normalizeMarginRate,
     normalizePaintedMultiplier,
+    normalizeSurchargePct,
     type PricingLike,
 } from '../src/utils/pricing.js';
 
+export interface CapBracket {
+    w_max: number;
+    l_max: number;
+}
+
+export interface CapSurcharges {
+    steep_pitch_pct: number;       // fraction, e.g. 0.10
+    steep_pitch_threshold: number; // lid_pitch /12
+    tall_skirt_pct: number;
+    tall_skirt_threshold: number;  // inches
+    extra_overhang_pct: number;
+    std_overhang_flat: number;     // inches
+    std_overhang_non_flat: number; // inches
+    tall_screen_pct: number;
+    tall_screen_threshold: number; // inches, no upper cap
+}
+
 export interface PricingConstants extends PricingLike {
     STORM_COLLAR_PRICES: Record<number, number>;
-    /** STUB: per-inch base-cost multiplier for the cap price formula. */
-    placeholder_multiplier?: number;
+    /** Cap multipliers keyed `${mount}_${lid_type}_${bracket}` (lowercase). */
+    CAP_MULTIPLIERS: Record<string, number>;
+    CAP_BRACKETS: { flat: CapBracket; non_flat: CapBracket };
+    CAP_SURCHARGES: CapSurcharges;
 }
 
 /**
@@ -63,6 +83,49 @@ const DEFAULT_PRICING: PricingConstants = {
         260: 180,
         280: 200,
         290: 210,
+    },
+    // PDF "4/17/2023" defaults for the cap configurator. Live values come from the
+    // "Cap configurator" block (H/I) of the pricing sheet; these are the fallbacks.
+    CAP_MULTIPLIERS: {
+        skirt_flat_small: 6.47,
+        skirt_flat_large: 8.09,
+        skirt_hip_ridge_small: 9.03,
+        skirt_hip_ridge_large: 11.29,
+        skirt_hip_small: 9.39,
+        skirt_hip_large: 11.73,
+        skirt_standing_seam_small: 12.17,
+        skirt_standing_seam_large: 15.21,
+        pitched_skirt_flat_small: 7.64,
+        pitched_skirt_flat_large: 9.56,
+        pitched_skirt_hip_ridge_small: 9.40,
+        pitched_skirt_hip_ridge_large: 11.75,
+        pitched_skirt_hip_small: 10.07,
+        pitched_skirt_hip_large: 12.59,
+        pitched_skirt_standing_seam_small: 12.50,
+        pitched_skirt_standing_seam_large: 15.63,
+        top_mount_flat_small: 4.91,
+        top_mount_flat_large: 6.14,
+        top_mount_hip_ridge_small: 7.98,
+        top_mount_hip_ridge_large: 9.98,
+        top_mount_hip_small: 8.68,
+        top_mount_hip_large: 10.85,
+        top_mount_standing_seam_small: 8.70,
+        top_mount_standing_seam_large: 10.88,
+    },
+    CAP_BRACKETS: {
+        flat:     { w_max: 33, l_max: 67 },
+        non_flat: { w_max: 45, l_max: 67 },
+    },
+    CAP_SURCHARGES: {
+        steep_pitch_pct: 0.10,
+        steep_pitch_threshold: 5,
+        tall_skirt_pct: 0.05,
+        tall_skirt_threshold: 4,
+        extra_overhang_pct: 0.10,
+        std_overhang_flat: 3,
+        std_overhang_non_flat: 4,
+        tall_screen_pct: 0.05,
+        tall_screen_threshold: 16,
     },
 };
 
@@ -144,6 +207,9 @@ function buildPricing(rows: Array<{ c?: Array<SheetCell> }>): PricingConstants {
     const materialMult: Record<string, number> = {};
     const stormCollarPrices: Record<number, number> = {};
     const modelCoefficients: Record<string, number> = {};
+    const capMultipliers: Record<string, number> = {};
+    const capBracketsRaw: Partial<Record<'flat_w_max' | 'flat_l_max' | 'non_flat_w_max' | 'non_flat_l_max', number>> = {};
+    const capSurchargesRaw: Partial<Record<keyof CapSurcharges, number>> = {};
     let legacyPowderCoatPercent: number | undefined;
     let kaminosMarginRate: number | undefined;
 
@@ -166,6 +232,31 @@ function buildPricing(rows: Array<{ c?: Array<SheetCell> }>): PricingConstants {
                 if (!isNaN(sizeTenths)) stormCollarPrices[sizeTenths] = value;
             } else if (upperKey.startsWith('COEF_')) {
                 modelCoefficients[trimmedKey.replace(/^COEF_/i, '')] = value;
+            } else if (upperKey.startsWith('MULT_')) {
+                capMultipliers[trimmedKey.replace(/^MULT_/i, '').toLowerCase()] = value;
+            } else if (upperKey.startsWith('BRACKET_')) {
+                const suffix = trimmedKey.replace(/^BRACKET_/i, '').toLowerCase();
+                if (suffix === 'flat_w_max' || suffix === 'flat_l_max' || suffix === 'non_flat_w_max' || suffix === 'non_flat_l_max') {
+                    capBracketsRaw[suffix] = value;
+                }
+            } else if (upperKey === 'CAP_STEEP_PITCH_PCT') {
+                capSurchargesRaw.steep_pitch_pct = normalizeSurchargePct(value);
+            } else if (upperKey === 'CAP_STEEP_PITCH_THRESHOLD') {
+                capSurchargesRaw.steep_pitch_threshold = value;
+            } else if (upperKey === 'CAP_TALL_SKIRT_PCT') {
+                capSurchargesRaw.tall_skirt_pct = normalizeSurchargePct(value);
+            } else if (upperKey === 'CAP_TALL_SKIRT_THRESHOLD') {
+                capSurchargesRaw.tall_skirt_threshold = value;
+            } else if (upperKey === 'CAP_EXTRA_OVERHANG_PCT') {
+                capSurchargesRaw.extra_overhang_pct = normalizeSurchargePct(value);
+            } else if (upperKey === 'CAP_STD_OVERHANG_FLAT') {
+                capSurchargesRaw.std_overhang_flat = value;
+            } else if (upperKey === 'CAP_STD_OVERHANG_NON_FLAT') {
+                capSurchargesRaw.std_overhang_non_flat = value;
+            } else if (upperKey === 'CAP_TALL_SCREEN_PCT') {
+                capSurchargesRaw.tall_screen_pct = normalizeSurchargePct(value);
+            } else if (upperKey === 'CAP_TALL_SCREEN_THRESHOLD') {
+                capSurchargesRaw.tall_screen_threshold = value;
             } else if (upperKey === 'POWDER_COAT' || lowerKey === 'powdercoat') {
                 legacyPowderCoatPercent = value;
             } else if (
@@ -197,6 +288,18 @@ function buildPricing(rows: Array<{ c?: Array<SheetCell> }>): PricingConstants {
         MATERIAL_MULT: { ...DEFAULT_PRICING.MATERIAL_MULT, ...materialMult },
         MODEL_COEFFICIENTS: { ...DEFAULT_PRICING.MODEL_COEFFICIENTS, ...modelCoefficients },
         STORM_COLLAR_PRICES: { ...DEFAULT_PRICING.STORM_COLLAR_PRICES, ...stormCollarPrices },
+        CAP_MULTIPLIERS: { ...DEFAULT_PRICING.CAP_MULTIPLIERS, ...capMultipliers },
+        CAP_BRACKETS: {
+            flat: {
+                w_max: capBracketsRaw.flat_w_max ?? DEFAULT_PRICING.CAP_BRACKETS.flat.w_max,
+                l_max: capBracketsRaw.flat_l_max ?? DEFAULT_PRICING.CAP_BRACKETS.flat.l_max,
+            },
+            non_flat: {
+                w_max: capBracketsRaw.non_flat_w_max ?? DEFAULT_PRICING.CAP_BRACKETS.non_flat.w_max,
+                l_max: capBracketsRaw.non_flat_l_max ?? DEFAULT_PRICING.CAP_BRACKETS.non_flat.l_max,
+            },
+        },
+        CAP_SURCHARGES: { ...DEFAULT_PRICING.CAP_SURCHARGES, ...capSurchargesRaw },
     };
 }
 
