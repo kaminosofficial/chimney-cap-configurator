@@ -1,14 +1,17 @@
 /**
- * Chase Cover Configurator – Shopify IIFE Entry Point (Shadow DOM)
+ * Chimney Cap Configurator – Shopify IIFE Entry Point (Shadow DOM)
  * ===========================================================
  * Renders the React app inside a Shadow DOM for complete style isolation
  * from Shopify theme CSS.
  *
  * AR/QR overlays are portaled to the light DOM so <model-viewer> AR works.
  *
- * Usage in Shopify Liquid:
- *   <chase-cover-configurator style="display:block;width:100%;height:800px;"></chase-cover-configurator>
- *   <script src="{{ 'chase-cover-configurator.iife.js' | asset_url }}"></script>
+ * Usage in Shopify Liquid (preferred):
+ *   <chimney-cap-configurator style="display:block;width:100%;height:800px;"></chimney-cap-configurator>
+ *   <script src="https://chimney-cap-configurator.vercel.app/chimney-cap-configurator.iife.js" defer></script>
+ *
+ * Legacy tag names (still recognized for backward compat with chase-style embeds):
+ *   <chase-cover-configurator>, <chase-configurator>, #chase-cover-configurator-mount, #chase-configurator-mount
  */
 
 import React from 'react';
@@ -56,7 +59,7 @@ import cssText from './styles/globals-scoped.css?inline';
     patchViewportForIOS();
 
     // 1. Inject Google Fonts into document head (must be in light DOM for fonts to load)
-    const FONT_ID = 'chase-cover-configurator-fonts';
+    const FONT_ID = 'chimney-cap-configurator-fonts';
     if (!document.getElementById(FONT_ID)) {
         const link = document.createElement('link');
         link.id = FONT_ID;
@@ -67,7 +70,7 @@ import cssText from './styles/globals-scoped.css?inline';
     }
 
     // 2. Inject QRious if not already present
-    const QRIOUS_ID = 'chase-cover-configurator-qrious';
+    const QRIOUS_ID = 'chimney-cap-configurator-qrious';
     if (!document.getElementById(QRIOUS_ID) && !(window as any).QRious) {
         const script = document.createElement('script');
         script.id = QRIOUS_ID;
@@ -75,20 +78,22 @@ import cssText from './styles/globals-scoped.css?inline';
         document.head.appendChild(script);
     }
 
-    // 3. Find mount point
+    // 3. Find mount point (new name preferred; chase-* names still accepted for backward compat)
     let mount: HTMLElement | null =
+        document.querySelector('chimney-cap-configurator') ||
         document.querySelector('chase-cover-configurator') ||
         document.querySelector('chase-configurator') ||
+        document.getElementById('chimney-cap-configurator-mount') ||
         document.getElementById('chase-cover-configurator-mount') ||
         document.getElementById('chase-configurator-mount');
 
     if (!mount) {
         mount = document.createElement('div');
-        mount.id = 'chase-cover-configurator-mount';
+        mount.id = 'chimney-cap-configurator-mount';
         mount.style.cssText = 'width:100%;height:800px;';
         document.body.appendChild(mount);
         console.warn(
-            '[ChaseCoverConfigurator] No <chase-cover-configurator>, <chase-configurator>, #chase-cover-configurator-mount, or #chase-configurator-mount found. Created one automatically.'
+            '[ChimneyCapConfigurator] No <chimney-cap-configurator> (or legacy <chase-cover-configurator> / <chase-configurator> / #*-mount) found. Created one automatically.'
         );
     }
 
@@ -143,48 +148,48 @@ import cssText from './styles/globals-scoped.css?inline';
 
     // 6. Create the scoped root wrapper inside the shadow root
     const root = document.createElement('div');
-    root.className = 'chase-cover-configurator-root';
+    root.className = 'chimney-cap-configurator-root';
     root.style.cssText = 'width:100%;height:100%;';
     shadow.appendChild(root);
 
     // 7. Create a light-DOM container for AR/QR overlays
     //    (model-viewer needs light DOM for AR to work)
     const portalContainer = document.createElement('div');
-    portalContainer.id = 'chase-cover-configurator-portal';
+    portalContainer.id = 'chimney-cap-configurator-portal';
     document.body.appendChild(portalContainer);
 
     // Inject overlay-specific CSS into light DOM for portaled content.
-    // We scope under #chase-cover-configurator-portal so it won't affect the rest of the page.
+    // We scope under #chimney-cap-configurator-portal so it won't affect the rest of the page.
     const portalStyle = document.createElement('style');
     portalStyle.textContent = `
-      #chase-cover-configurator-portal { --bg: #fdfcfb; --surface: #f8f5f1; --border: #ddd8d0; --text: #1c1914; --text-muted: #7a7168; --accent: #4b484b; --sans: "DM Sans", -apple-system, sans-serif; }
-      #chase-cover-configurator-portal .ar-overlay { position:fixed; inset:0; z-index:100000; background:rgba(0,0,0,0.85); display:none; align-items:center; justify-content:center; flex-direction:column; }
-      #chase-cover-configurator-portal .ar-overlay.active { display:flex; }
-      #chase-cover-configurator-portal .ar-overlay model-viewer { width:90vw; height:75vh; max-width:800px; background:#222; border-radius:12px; }
-      #chase-cover-configurator-portal .ar-close { position:absolute; top:20px; right:24px; width:40px; height:40px; border:none; background:rgba(255,255,255,0.15); color:#fff; font-size:22px; border-radius:50%; cursor:pointer; backdrop-filter:blur(4px); display:flex; align-items:center; justify-content:center; z-index:100001; padding:0; line-height:1; }
-      #chase-cover-configurator-portal .ar-close:hover { background:rgba(255,255,255,0.3); }
-      #chase-cover-configurator-portal .ar-loading { color:#fff; font-family:var(--sans); font-size:13px; margin-top:12px; }
-      #chase-cover-configurator-portal .qr-overlay { position:fixed; inset:0; z-index:100000; background:rgba(0,0,0,0.85); display:none; align-items:center; justify-content:center; flex-direction:column; backdrop-filter:blur(5px); }
-      #chase-cover-configurator-portal .qr-overlay.active { display:flex; }
-      #chase-cover-configurator-portal .qr-card { background:var(--bg); padding:30px; border-radius:16px; text-align:center; max-width:90vw; width:320px; position:relative; font-family:var(--sans); }
-      #chase-cover-configurator-portal .qr-close { position:absolute; top:10px; right:12px; background:none; border:none; font-size:20px; color:var(--text-muted); cursor:pointer; padding:0; line-height:1; }
-      #chase-cover-configurator-portal .qr-close:hover { color:var(--text); }
-      #chase-cover-configurator-portal .qr-title { font-family:var(--sans); font-size:18px; font-weight:700; margin-bottom:10px; color:var(--text); }
-      #chase-cover-configurator-portal .qr-desc { font-family:var(--sans); font-size:13px; color:var(--text-muted); margin-bottom:20px; line-height:1.5; }
-      #chase-cover-configurator-portal .qr-canvas-container { background:#fff; padding:10px; border-radius:8px; border:1px solid var(--border); display:inline-flex; align-items:center; justify-content:center; }
-      #chase-cover-configurator-portal .ar-mobile-prompt { position:fixed; inset:0; z-index:100000; background:var(--bg); display:none; align-items:center; justify-content:center; flex-direction:column; text-align:center; padding:24px; }
-      #chase-cover-configurator-portal .ar-mobile-prompt.active { display:flex; }
-      #chase-cover-configurator-portal .ar-mobile-prompt h2 { font-size:22px; margin-bottom:12px; font-family:var(--sans); color:var(--text); font-weight:700; }
-      #chase-cover-configurator-portal .ar-mobile-prompt p { font-size:15px; color:var(--text-muted); margin-bottom:30px; font-family:var(--sans); }
-      #chase-cover-configurator-portal .launch-ar-big-btn { padding:16px 32px; font-size:18px; font-weight:700; font-family:var(--sans); background:var(--accent); color:#fff; border:none; border-radius:30px; cursor:pointer; box-shadow:0 4px 15px rgba(0,0,0,0.2); }
+      #chimney-cap-configurator-portal { --bg: #fdfcfb; --surface: #f8f5f1; --border: #ddd8d0; --text: #1c1914; --text-muted: #7a7168; --accent: #4b484b; --sans: "DM Sans", -apple-system, sans-serif; }
+      #chimney-cap-configurator-portal .ar-overlay { position:fixed; inset:0; z-index:100000; background:rgba(0,0,0,0.85); display:none; align-items:center; justify-content:center; flex-direction:column; }
+      #chimney-cap-configurator-portal .ar-overlay.active { display:flex; }
+      #chimney-cap-configurator-portal .ar-overlay model-viewer { width:90vw; height:75vh; max-width:800px; background:#222; border-radius:12px; }
+      #chimney-cap-configurator-portal .ar-close { position:absolute; top:20px; right:24px; width:40px; height:40px; border:none; background:rgba(255,255,255,0.15); color:#fff; font-size:22px; border-radius:50%; cursor:pointer; backdrop-filter:blur(4px); display:flex; align-items:center; justify-content:center; z-index:100001; padding:0; line-height:1; }
+      #chimney-cap-configurator-portal .ar-close:hover { background:rgba(255,255,255,0.3); }
+      #chimney-cap-configurator-portal .ar-loading { color:#fff; font-family:var(--sans); font-size:13px; margin-top:12px; }
+      #chimney-cap-configurator-portal .qr-overlay { position:fixed; inset:0; z-index:100000; background:rgba(0,0,0,0.85); display:none; align-items:center; justify-content:center; flex-direction:column; backdrop-filter:blur(5px); }
+      #chimney-cap-configurator-portal .qr-overlay.active { display:flex; }
+      #chimney-cap-configurator-portal .qr-card { background:var(--bg); padding:30px; border-radius:16px; text-align:center; max-width:90vw; width:320px; position:relative; font-family:var(--sans); }
+      #chimney-cap-configurator-portal .qr-close { position:absolute; top:10px; right:12px; background:none; border:none; font-size:20px; color:var(--text-muted); cursor:pointer; padding:0; line-height:1; }
+      #chimney-cap-configurator-portal .qr-close:hover { color:var(--text); }
+      #chimney-cap-configurator-portal .qr-title { font-family:var(--sans); font-size:18px; font-weight:700; margin-bottom:10px; color:var(--text); }
+      #chimney-cap-configurator-portal .qr-desc { font-family:var(--sans); font-size:13px; color:var(--text-muted); margin-bottom:20px; line-height:1.5; }
+      #chimney-cap-configurator-portal .qr-canvas-container { background:#fff; padding:10px; border-radius:8px; border:1px solid var(--border); display:inline-flex; align-items:center; justify-content:center; }
+      #chimney-cap-configurator-portal .ar-mobile-prompt { position:fixed; inset:0; z-index:100000; background:var(--bg); display:none; align-items:center; justify-content:center; flex-direction:column; text-align:center; padding:24px; }
+      #chimney-cap-configurator-portal .ar-mobile-prompt.active { display:flex; }
+      #chimney-cap-configurator-portal .ar-mobile-prompt h2 { font-size:22px; margin-bottom:12px; font-family:var(--sans); color:var(--text); font-weight:700; }
+      #chimney-cap-configurator-portal .ar-mobile-prompt p { font-size:15px; color:var(--text-muted); margin-bottom:30px; font-family:var(--sans); }
+      #chimney-cap-configurator-portal .launch-ar-big-btn { padding:16px 32px; font-size:18px; font-weight:700; font-family:var(--sans); background:var(--accent); color:#fff; border:none; border-radius:30px; cursor:pointer; box-shadow:0 4px 15px rgba(0,0,0,0.2); }
     `;
     document.head.appendChild(portalStyle);
 
     // Expose the portal container so App.tsx can use it via React portals
     (window as any).__chasePortalContainer = portalContainer;
 
-    // 8. Detect API base URL from the script's own src attribute
-    const IIFE_FILENAMES = ['chase-cover-configurator', 'chase-configurator'];
+    // 8. Detect API base URL from the script's own src attribute. New name first, legacy aliases after.
+    const IIFE_FILENAMES = ['chimney-cap-configurator', 'chase-cover-configurator', 'chase-configurator'];
     let scriptSrc = '';
     const scripts = document.getElementsByTagName('script');
     for (let i = 0; i < scripts.length; i++) {

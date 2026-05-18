@@ -1,5 +1,5 @@
 {
-  "name": "chase-cover-configurator",
+  "name": "chimney-cap-configurator",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "sync:shopify-css": "node scripts/sync-shopify-css.mjs",
     "build:shopify": "npm run sync:shopify-css && cross-env BUILD_TARGET=shopify vite build",
-    "build:vercel": "npm run build && npm run build:shopify && node -e \"const fs=require('fs'); fs.copyFileSync('dist-shopify/chase-cover-configurator.iife.js','dist/chase-cover-configurator.iife.js'); fs.copyFileSync('dist-shopify/chase-cover-configurator.iife.js','dist/chase-configurator.iife.js');\"",
+    "build:vercel": "npm run build && npm run build:shopify && node -e \"const fs=require('fs'); const src='dist-shopify/chimney-cap-configurator.iife.js'; for (const dest of ['dist/chimney-cap-configurator.iife.js','dist/chase-cover-configurator.iife.js','dist/chase-configurator.iife.js']) fs.copyFileSync(src, dest);\"",
     "lint": "eslint .",
     "preview": "vite preview"
   },

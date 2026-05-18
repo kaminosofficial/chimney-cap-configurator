@@ -22,8 +22,8 @@ function getBuildConfig(isVercel: boolean, buildTarget?: string) {
     return {
       lib: {
         entry: 'src/shopify-entry.tsx',
-        name: 'ChaseCoverConfigurator',
-        fileName: 'chase-cover-configurator',
+        name: 'ChimneyCapConfigurator',
+        fileName: 'chimney-cap-configurator',
         formats: ['iife'] as ('iife')[],
       },
       outDir: 'dist-shopify',

@@ -29,7 +29,7 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
             : req.headers['x-forwarded-proto']) || 'https';
         const host = (Array.isArray(req.headers['x-forwarded-host'])
             ? req.headers['x-forwarded-host'][0]
-            : req.headers['x-forwarded-host']) || req.headers.host || 'chase-cover-configurator.vercel.app';
+            : req.headers['x-forwarded-host']) || req.headers.host || 'chimney-cap-configurator.vercel.app';
         const redirectUri = `${proto.trim()}://${String(host).trim()}/api/shopify/callback`;
 
         // Generate a simple random nonce for CSRF protection

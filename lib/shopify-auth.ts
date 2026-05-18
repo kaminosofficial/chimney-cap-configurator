@@ -67,6 +67,8 @@ export function warnUnknownOrigin(origin: string | undefined, tag: string): void
 
     const ALLOWED_PATTERNS = [
         /^https?:\/\/(www\.)?kaminos\.com$/,
+        /^https?:\/\/[\w-]*kaminosshop[\w-]*\.myshopify\.com$/,
+        /^https?:\/\/chimney-cap-configurator[^.]*\.vercel\.app$/,
         /^https?:\/\/chase-cover-configurator[^.]*\.vercel\.app$/,
         /^https?:\/\/localhost(:\d+)?$/,
         /^https?:\/\/127\.0\.0\.1(:\d+)?$/,

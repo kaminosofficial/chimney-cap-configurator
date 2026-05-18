@@ -134,8 +134,9 @@ All environment variables are set in Vercel (Settings > Environment Variables) a
 
 Runs `npm run build && npm run build:shopify && node -e "...copy IIFE to dist/..."`. This produces:
 - `dist/index.html` + assets — standalone SPA (accessible at the Vercel URL root)
-- `dist/chase-cover-configurator.iife.js` — the IIFE bundle loaded by Shopify
-- `dist/chase-configurator.iife.js` — legacy filename alias (also copied for backwards compat)
+- `dist/chimney-cap-configurator.iife.js` — the canonical IIFE bundle for Shopify (preferred filename)
+- `dist/chase-cover-configurator.iife.js` — byte-identical legacy alias (backwards compat)
+- `dist/chase-configurator.iife.js` — byte-identical legacy alias (backwards compat)
 - `api/*.ts` — Vercel serverless functions (auto-detected)
 
 ### CSS Sync (`sync:shopify-css`)
@@ -166,8 +167,8 @@ See `SHOPIFY-INTEGRATION-GUIDE.md` for full step-by-step setup.
 
 ### How It Works (Variant-Based Cart Flow)
 
-1. **Shopify product page** loads `<script src="https://chase-cover-configurator.vercel.app/chase-cover-configurator.iife.js">`
-2. The IIFE (`shopify-entry.tsx`) attaches a **Shadow DOM** to `<chase-cover-configurator>` for CSS isolation
+1. **Shopify product page** loads `<script src="https://chimney-cap-configurator.vercel.app/chimney-cap-configurator.iife.js" defer></script>` (legacy `chase-cover-configurator.iife.js` and `chase-configurator.iife.js` filenames still resolve to the same bundle on this project)
+2. The IIFE (`shopify-entry.tsx`) attaches a **Shadow DOM** to `<chimney-cap-configurator>` (or any of the legacy aliases `<chase-cover-configurator>` / `<chase-configurator>`) for CSS isolation
 3. On load, it calls `GET /api/pricing` to fetch pricing constants from Google Sheets
 4. User configures the chase cover; price updates in real-time
 5. **"Add to Cart"** calls `POST /api/add-to-cart` which:
@@ -191,11 +192,11 @@ See `SHOPIFY-INTEGRATION-GUIDE.md` for full step-by-step setup.
 
 The Shopify Liquid template can pass product/variant IDs:
 ```html
-<chase-cover-configurator
+<chimney-cap-configurator
   product-id="{{ product.id }}"
   variant-id="{{ product.variants.first.id }}"
   style="display:block;width:100%;height:800px;">
-</chase-cover-configurator>
+</chimney-cap-configurator>
 ```
 
 These are read by `shopify-entry.tsx` and passed to `App` as props. The `product-id` is also resolved at runtime from multiple Shopify DOM sources (see `resolveRuntimeShopifyIds` in `App.tsx`).
@@ -695,7 +696,7 @@ On page mount, `restoreConfigIfNeeded()` is called:
 - Self-executing IIFE that:
   1. Patches iOS viewport (prevents zoom on input focus)
   2. Injects Google Fonts + QRious into document head
-  3. Finds `<chase-cover-configurator>`, `<chase-configurator>`, `#chase-cover-configurator-mount`, or `#chase-configurator-mount`
+  3. Finds `<chimney-cap-configurator>` (or legacy `<chase-cover-configurator>` / `<chase-configurator>` / `#chimney-cap-configurator-mount` / `#chase-cover-configurator-mount` / `#chase-configurator-mount`)
   4. **Applies a responsive mount height** — desktop (≥768px) overrides the inline height to `max(640px, 80vh)` so the configurator fills more of the viewport on large screens; mobile keeps the original inline/`100%` height. Re-applies on `resize`, `load`, and at +250ms / +1000ms to handle Shopify themes that reflow late.
   5. Attaches Shadow DOM with `globals-scoped.css` injected as `<style>`
   6. Creates a light-DOM portal container for AR/QR overlays with portal-scoped CSS in `<head>`
@@ -705,7 +706,7 @@ On page mount, `restoreConfigIfNeeded()` is called:
 
 ### Legacy Web Component (`web-component.tsx`)
 - Not used in current production flow
-- Defines a `<chase-cover-configurator>` custom element with Shadow DOM
+- Defines a `<chimney-cap-configurator>` custom element with Shadow DOM (also registers `<chase-cover-configurator>` and `<chase-configurator>` as aliases)
 
 ---
 

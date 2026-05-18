@@ -29,7 +29,7 @@ Build targets:
 | Command | Output |
 |---|---|
 | `npm run build` | `dist/` — standalone SPA |
-| `npm run build:shopify` | `dist-shopify/chase-cover-configurator.iife.js` — Shopify IIFE bundle (filename kept for backwards-compat with the existing Shopify embed) |
+| `npm run build:shopify` | `dist-shopify/chimney-cap-configurator.iife.js` — Shopify IIFE bundle. The build also writes `chase-cover-configurator.iife.js` and `chase-configurator.iife.js` to `dist/` as byte-identical legacy aliases. |
 | `npm run build:vercel` | both of the above, copied into `dist/` for Vercel |
 
 ## Deploy

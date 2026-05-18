@@ -8,7 +8,7 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 const sourcePath = path.join(projectRoot, 'src', 'styles', 'globals.css');
 const outputPath = path.join(projectRoot, 'src', 'styles', 'globals-scoped.css');
-const ROOT_SELECTOR = '.chase-cover-configurator-root';
+const ROOT_SELECTOR = '.chimney-cap-configurator-root';
 
 function scopeSelector(selector) {
   const trimmed = selector.trim();

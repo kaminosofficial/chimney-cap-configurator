@@ -9,46 +9,32 @@
     ],
     "headers": [
         {
+            "source": "/chimney-cap-configurator.iife.js",
+            "headers": [
+                { "key": "Access-Control-Allow-Origin", "value": "*" },
+                { "key": "Cache-Control", "value": "public, max-age=60, s-maxage=300" }
+            ]
+        },
+        {
             "source": "/chase-cover-configurator.iife.js",
             "headers": [
-                {
-                    "key": "Access-Control-Allow-Origin",
-                    "value": "*"
-                },
-                {
-                    "key": "Cache-Control",
-                    "value": "public, max-age=60, s-maxage=300"
-                }
+                { "key": "Access-Control-Allow-Origin", "value": "*" },
+                { "key": "Cache-Control", "value": "public, max-age=60, s-maxage=300" }
             ]
         },
         {
             "source": "/chase-configurator.iife.js",
             "headers": [
-                {
-                    "key": "Access-Control-Allow-Origin",
-                    "value": "*"
-                },
-                {
-                    "key": "Cache-Control",
-                    "value": "public, max-age=60, s-maxage=300"
-                }
+                { "key": "Access-Control-Allow-Origin", "value": "*" },
+                { "key": "Cache-Control", "value": "public, max-age=60, s-maxage=300" }
             ]
         },
         {
             "source": "/api/(.*)",
             "headers": [
-                {
-                    "key": "Access-Control-Allow-Origin",
-                    "value": "*"
-                },
-                {
-                    "key": "Access-Control-Allow-Methods",
-                    "value": "GET, POST, OPTIONS"
-                },
-                {
-                    "key": "Access-Control-Allow-Headers",
-                    "value": "Content-Type"
-                }
+                { "key": "Access-Control-Allow-Origin", "value": "*" },
+                { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
+                { "key": "Access-Control-Allow-Headers", "value": "Content-Type" }
             ]
         }
     ],
@@ -57,13 +43,8 @@
         "api/variant-image.ts": { "maxDuration": 25 }
     },
     "rewrites": [
-        {
-            "source": "/chase-cover-configurator.iife.js",
-            "destination": "/chase-cover-configurator.iife.js"
-        },
-        {
-            "source": "/chase-configurator.iife.js",
-            "destination": "/chase-configurator.iife.js"
-        }
+        { "source": "/chimney-cap-configurator.iife.js", "destination": "/chimney-cap-configurator.iife.js" },
+        { "source": "/chase-cover-configurator.iife.js", "destination": "/chase-cover-configurator.iife.js" },
+        { "source": "/chase-configurator.iife.js", "destination": "/chase-configurator.iife.js" }
     ]
 }
