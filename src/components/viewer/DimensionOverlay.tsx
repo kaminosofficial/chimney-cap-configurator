@@ -2,6 +2,7 @@ import { Html, Line } from '@react-three/drei';
 import { useConfigStore } from '../../store/configStore';
 import { SC } from '../../utils/geometry';
 import { formatFrac } from '../../utils/format';
+import { PriceBreakdownPanel } from '../sidebar/PriceBreakdownPanel';
 
 const COLOR = '#00e5ff'; // Bright Cyan
 
@@ -147,6 +148,7 @@ export function DimensionOverlay() {
                             <><br/>Flange Width: {formatFrac(config.flange_width)}"</>
                         )}
                     </div>
+                    <PriceBreakdownPanel />
                 </div>
             </Html>
         </>

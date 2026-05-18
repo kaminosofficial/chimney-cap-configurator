@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Sidebar } from './components/sidebar/Sidebar';
-import { PriceBreakdownPanel } from './components/sidebar/PriceBreakdownPanel';
 import { CapViewer } from './components/viewer/CapViewer';
 import { useConfigStore, saveConfigForRestore, restoreConfigIfNeeded } from './store/configStore';
 
@@ -1810,7 +1809,6 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 {displayDimLines.map((line, i) => (
                   <div key={i}>{line}</div>
                 ))}
-                <PriceBreakdownPanel />
               </>
             ) : (
               <button

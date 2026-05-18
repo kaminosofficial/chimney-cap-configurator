@@ -159,7 +159,7 @@ const initial: StoreData = {
   drip_edge: true,
   flange_width: 1.5,
   screen_height: 10,
-  lid_overhang: 4,
+  lid_overhang: 3, // standard for flat (initial lid_type). Auto-snaps when lid changes (see `set` reducer).
   lid_pitch: 5,
   cross_break: true,
   seam_count: 4,
@@ -224,10 +224,20 @@ export const useConfigStore = create<CapConfig>()(
   (set) => ({
     ...initial,
     set: (partial) => set(state => {
-      // Auto-disable powder coat if copper
-      const overrides: Partial<CapConfig> = partial.material === 'copper'
-        ? { powder_coat: false }
-        : {};
+      const overrides: Partial<CapConfig> = {};
+
+      // Auto-disable powder coat if copper.
+      if (partial.material === 'copper') overrides.powder_coat = false;
+
+      // When lid_type changes, snap lid_overhang to the new standard ONLY if the user
+      // hadn't customized it for the old lid (i.e., current value == old standard).
+      // If they typed a custom value, it persists across lid switches.
+      const lidChanging = partial.lid_type !== undefined && partial.lid_type !== state.lid_type;
+      if (lidChanging && partial.lid_overhang === undefined) {
+        const oldStd = state.lid_type === 'flat' ? 3 : 4;
+        const newStd = partial.lid_type === 'flat' ? 3 : 4;
+        if (state.lid_overhang === oldStd) overrides.lid_overhang = newStd;
+      }
 
       const next = { ...state, ...partial, ...overrides };
       const nextPrice = computeCapPrice(next);
