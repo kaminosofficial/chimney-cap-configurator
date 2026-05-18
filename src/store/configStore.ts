@@ -54,10 +54,13 @@ type StoreData = Omit<CapConfig, 'set' | 'setOrbitEnabled'>;
 
 export interface CapPriceStep {
   label: string;
-  factor: number;
+  factor: number;        // raw multiplier (1.05 for +5%, 3.0 for × 3)
+  factorLabel: string;   // human-friendly: "+5%" for surcharges, "× 3" for multipliers, "—" if skipped
   applied: boolean;
-  detail: string;
-  runningCost: number;
+  detail: string;        // why it was / wasn't applied (e.g. "screen_height 20 > 16")
+  prevCost: number;      // running cost BEFORE this step
+  runningCost: number;   // running cost AFTER this step
+  delta: number;         // runningCost - prevCost (0 if skipped)
 }
 
 export interface CapPriceBreakdown {
@@ -114,28 +117,38 @@ export function computeCapPriceBreakdown(s: Partial<StoreData>): CapPriceBreakdo
   const stdOverhang = lid_type === 'flat' ? sur.std_overhang_flat : sur.std_overhang_non_flat;
   const materialMult = PRICING.MATERIAL_MULT[material] ?? 1;
 
-  const push = (label: string, factor: number, applied: boolean, detail: string) => {
+  const push = (label: string, factor: number, applied: boolean, detail: string, factorLabel: string) => {
+    const prevCost = cost;
     if (applied) cost *= factor;
-    steps.push({ label, factor, applied, detail, runningCost: cost });
+    steps.push({ label, factor, factorLabel: applied ? factorLabel : '—', applied, detail, prevCost, runningCost: cost, delta: cost - prevCost });
   };
 
-  push('Material', materialMult, materialMult !== 1, `${material} × ${materialMult}`);
+  // Surcharges use "+N%" labels; multiplicative factors use "× N".
+  const pct = (rate: number) => `+${Math.round(rate * 100)}%`;
+  const mult = (factor: number) => `× ${factor.toFixed(factor === Math.round(factor) ? 0 : 2).replace(/\.?0+$/, '')}`;
+
+  push('Material', materialMult, materialMult !== 1, material, mult(materialMult));
   push('Steep pitch', 1 + sur.steep_pitch_pct, pitch > sur.steep_pitch_threshold,
-    `lid_pitch ${pitch} ${pitch > sur.steep_pitch_threshold ? '>' : '≤'} ${sur.steep_pitch_threshold}`);
+    `lid_pitch ${pitch} ${pitch > sur.steep_pitch_threshold ? '>' : '≤'} ${sur.steep_pitch_threshold}`,
+    pct(sur.steep_pitch_pct));
   push('Tall skirt', 1 + sur.tall_skirt_pct,
     mount !== 'top_mount' && vSkirt > sur.tall_skirt_threshold,
-    mount === 'top_mount' ? 'top_mount: no skirt' : `vertical_skirt ${vSkirt} ${vSkirt > sur.tall_skirt_threshold ? '>' : '≤'} ${sur.tall_skirt_threshold}`);
+    mount === 'top_mount' ? 'top_mount: no skirt' : `vertical_skirt ${vSkirt} ${vSkirt > sur.tall_skirt_threshold ? '>' : '≤'} ${sur.tall_skirt_threshold}`,
+    pct(sur.tall_skirt_pct));
   push('Extra overhang', 1 + sur.extra_overhang_pct, overhang > stdOverhang,
-    `overhang ${overhang} ${overhang > stdOverhang ? '>' : '≤'} ${stdOverhang} (std)`);
+    `overhang ${overhang} ${overhang > stdOverhang ? '>' : '≤'} ${stdOverhang} (std)`,
+    pct(sur.extra_overhang_pct));
   push('Tall screen', 1 + sur.tall_screen_pct, screen > sur.tall_screen_threshold,
-    `screen_height ${screen} ${screen > sur.tall_screen_threshold ? '>' : '≤'} ${sur.tall_screen_threshold}`);
+    `screen_height ${screen} ${screen > sur.tall_screen_threshold ? '>' : '≤'} ${sur.tall_screen_threshold}`,
+    pct(sur.tall_screen_pct));
   push('Powder coat', PRICING.PAINTED_MULTIPLIER, !!s.powder_coat && material !== 'copper',
-    s.powder_coat ? (material === 'copper' ? 'copper: not applied' : `× ${PRICING.PAINTED_MULTIPLIER}`) : 'off');
+    s.powder_coat ? (material === 'copper' ? 'copper: not applied' : 'on') : 'off',
+    mult(PRICING.PAINTED_MULTIPLIER));
 
   // Multiplier semantics (NOT 1 + rate): sheet "300%" → MARGIN_RATE = 3.0 → final = cost × 3.0.
   // Fallback to ×1 when the sheet is unreachable so we never display $0.
   const marginRate = PRICING.MARGIN_RATE > 0 ? PRICING.MARGIN_RATE : 1;
-  push('Kaminos margin', marginRate, marginRate !== 1, `× ${marginRate}`);
+  push('Kaminos margin', marginRate, marginRate !== 1, 'sheet "Kaminos Margin"', mult(marginRate));
 
   return {
     width: w, length: l, mount, lid_type, material,
