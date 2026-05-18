@@ -376,7 +376,9 @@ The pricing formula is implemented in `computePricingBreakdown()` which is share
 
 ### Cap Pricing
 
-**File**: `src/store/configStore.ts` → `computeCapPrice(s)`. The chase `computePricingBreakdown` is **not** called for the cap — it has its own pipeline. All multipliers, bracket thresholds, and surcharge percentages are driven from the **Cap configurator** block (columns H/I) of the Google Sheet; the defaults in `lib/pricing-sheet.ts` / `src/config/pricing.ts` mirror the National Chimney 4/17/2023 PDFs and act as fallbacks when the sheet is unreachable.
+**Files**: `src/store/configStore.ts` → `computeCapPriceBreakdown(s)` (full structured breakdown) + `computeCapPrice(s)` (thin wrapper returning `.total`). The chase `computePricingBreakdown` is **not** called for the cap — it has its own pipeline. All multipliers, bracket thresholds, and surcharge percentages live **only** in the **Cap configurator** block (columns H/I) of the Google Sheet. The `CAP_MULTIPLIERS` / `CAP_BRACKETS` / `CAP_SURCHARGES` defaults in `lib/pricing-sheet.ts` and `src/config/pricing.ts` are intentionally **empty / zero** — prices look obviously broken (multiplier = 1, no surcharges) until the sheet rows are pasted, and that mismatch is the signal to paste them.
+
+**Debug panel**: `<PriceBreakdownPanel>` in `src/components/sidebar/PriceBreakdownPanel.tsx` renders inside the dim-overlay whenever **Show dimensions** is open. It shows the bracket selection rule, the live sheet key being read (`MULT_<MOUNT>_<LID>_<BRACKET>`), each surcharge step with its applied/skipped reason, and the running cost at every step. A red ⚠ next to the multiplier means the lookup missed the sheet (key not present → fallback × 1). The panel is **temporary** — meant to be removed once the live sheet values are verified.
 
 **No Call-for-Pricing state.** Every input combination (including copper, screens > 24", and W/L beyond the printed price-sheet ranges) produces a numeric price. The `PriceDisplay` "Call for Pricing" branch has been deleted as unreachable.
 

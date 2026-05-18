@@ -52,6 +52,31 @@ export interface CapConfig {
 
 type StoreData = Omit<CapConfig, 'set' | 'setOrbitEnabled'>;
 
+export interface CapPriceStep {
+  label: string;
+  factor: number;
+  applied: boolean;
+  detail: string;
+  runningCost: number;
+}
+
+export interface CapPriceBreakdown {
+  width: number;
+  length: number;
+  mount: string;
+  lid_type: string;
+  material: string;
+  bracket: 'small' | 'large';
+  bracketRule: string;     // human-readable, e.g. "W ≤ 33 ✓, L ≤ 67 ✓"
+  multiplierKey: string;   // e.g. "skirt_flat_small"
+  multiplier: number;
+  multiplierFromSheet: boolean;
+  baseCost: number;        // (w + l) × multiplier
+  steps: CapPriceStep[];
+  marginRate: number;
+  total: number;
+}
+
 // Cap pricing pipeline (sheet-driven; no Call-for-Pricing branches — every input produces a price).
 //   1. base = (w + l) × MULT[mount_lid_bracket]                         (PDF 4/17/2023 multipliers)
 //   2. × MATERIAL_MULT[material]                                        (copper = 3 from sheet)
@@ -59,34 +84,69 @@ type StoreData = Omit<CapConfig, 'set' | 'setOrbitEnabled'>;
 //   4. × PAINTED_MULTIPLIER if powder_coat && !copper
 //   5. × MARGIN_RATE (Kaminos margin, multiplier semantics)
 // All thresholds and percentages live in the "Cap configurator" block (H/I) of the Google Sheet.
-export function computeCapPrice(s: Partial<StoreData>): number {
+export function computeCapPriceBreakdown(s: Partial<StoreData>): CapPriceBreakdown {
   const w = s.width || 24;
   const l = s.length || 36;
   const screen = s.screen_height || 10;
   const mount = s.mount || 'skirt';
   const lid_type = s.lid_type || 'flat';
   const material = s.material || 'stainless';
+  const pitch = s.lid_pitch ?? 5;
+  const vSkirt = s.vertical_skirt ?? 3;
+  const overhang = s.lid_overhang ?? (lid_type === 'flat' ? 3 : 4);
 
   // Bracket: small only if BOTH dimensions fit; large otherwise (no upper cap).
   const bracketDims = lid_type === 'flat' ? PRICING.CAP_BRACKETS.flat : PRICING.CAP_BRACKETS.non_flat;
-  const bracket = w <= bracketDims.w_max && l <= bracketDims.l_max ? 'small' : 'large';
-  const multiplier = PRICING.CAP_MULTIPLIERS[`${mount}_${lid_type}_${bracket}`] ?? 1;
+  const wFits = w <= bracketDims.w_max;
+  const lFits = l <= bracketDims.l_max;
+  const bracket: 'small' | 'large' = wFits && lFits ? 'small' : 'large';
+  const bracketRule = `W ${wFits ? '≤' : '>'} ${bracketDims.w_max} ${wFits ? '✓' : '✗'}, L ${lFits ? '≤' : '>'} ${bracketDims.l_max} ${lFits ? '✓' : '✗'}`;
 
-  let cost = (w + l) * multiplier;
-  cost *= PRICING.MATERIAL_MULT[material] ?? 1;
+  const multiplierKey = `${mount}_${lid_type}_${bracket}`;
+  const multiplierFromSheet = multiplierKey in PRICING.CAP_MULTIPLIERS;
+  const multiplier = PRICING.CAP_MULTIPLIERS[multiplierKey] ?? 1;
+
+  const baseCost = (w + l) * multiplier;
+  let cost = baseCost;
+  const steps: CapPriceStep[] = [];
 
   const sur = PRICING.CAP_SURCHARGES;
-  if ((s.lid_pitch ?? 5) > sur.steep_pitch_threshold) cost *= 1 + sur.steep_pitch_pct;
-  if (mount !== 'top_mount' && (s.vertical_skirt ?? 3) > sur.tall_skirt_threshold) cost *= 1 + sur.tall_skirt_pct;
   const stdOverhang = lid_type === 'flat' ? sur.std_overhang_flat : sur.std_overhang_non_flat;
-  if ((s.lid_overhang ?? stdOverhang) > stdOverhang) cost *= 1 + sur.extra_overhang_pct;
-  if (screen > sur.tall_screen_threshold) cost *= 1 + sur.tall_screen_pct;
-  if (s.powder_coat && material !== 'copper') cost *= PRICING.PAINTED_MULTIPLIER;
+  const materialMult = PRICING.MATERIAL_MULT[material] ?? 1;
+
+  const push = (label: string, factor: number, applied: boolean, detail: string) => {
+    if (applied) cost *= factor;
+    steps.push({ label, factor, applied, detail, runningCost: cost });
+  };
+
+  push('Material', materialMult, materialMult !== 1, `${material} × ${materialMult}`);
+  push('Steep pitch', 1 + sur.steep_pitch_pct, pitch > sur.steep_pitch_threshold,
+    `lid_pitch ${pitch} ${pitch > sur.steep_pitch_threshold ? '>' : '≤'} ${sur.steep_pitch_threshold}`);
+  push('Tall skirt', 1 + sur.tall_skirt_pct,
+    mount !== 'top_mount' && vSkirt > sur.tall_skirt_threshold,
+    mount === 'top_mount' ? 'top_mount: no skirt' : `vertical_skirt ${vSkirt} ${vSkirt > sur.tall_skirt_threshold ? '>' : '≤'} ${sur.tall_skirt_threshold}`);
+  push('Extra overhang', 1 + sur.extra_overhang_pct, overhang > stdOverhang,
+    `overhang ${overhang} ${overhang > stdOverhang ? '>' : '≤'} ${stdOverhang} (std)`);
+  push('Tall screen', 1 + sur.tall_screen_pct, screen > sur.tall_screen_threshold,
+    `screen_height ${screen} ${screen > sur.tall_screen_threshold ? '>' : '≤'} ${sur.tall_screen_threshold}`);
+  push('Powder coat', PRICING.PAINTED_MULTIPLIER, !!s.powder_coat && material !== 'copper',
+    s.powder_coat ? (material === 'copper' ? 'copper: not applied' : `× ${PRICING.PAINTED_MULTIPLIER}`) : 'off');
 
   // Multiplier semantics (NOT 1 + rate): sheet "300%" → MARGIN_RATE = 3.0 → final = cost × 3.0.
   // Fallback to ×1 when the sheet is unreachable so we never display $0.
-  const marginMultiplier = PRICING.MARGIN_RATE > 0 ? PRICING.MARGIN_RATE : 1;
-  return cost * marginMultiplier;
+  const marginRate = PRICING.MARGIN_RATE > 0 ? PRICING.MARGIN_RATE : 1;
+  push('Kaminos margin', marginRate, marginRate !== 1, `× ${marginRate}`);
+
+  return {
+    width: w, length: l, mount, lid_type, material,
+    bracket, bracketRule,
+    multiplierKey, multiplier, multiplierFromSheet,
+    baseCost, steps, marginRate, total: cost,
+  };
+}
+
+export function computeCapPrice(s: Partial<StoreData>): number {
+  return computeCapPriceBreakdown(s).total;
 }
 
 const initial: StoreData = {
