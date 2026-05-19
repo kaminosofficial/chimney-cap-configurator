@@ -1888,7 +1888,11 @@ export default function App({ productId, variantId }: AppProps = {}) {
             submittingRef.current = true;
             let shouldResetSubmitting = true;
             try {
-              
+              // Save BEFORE any async work — if the user navigates to /cart fast we still need
+              // the config in sessionStorage when they come back. The duplicate call later in
+              // the success path is a no-op overwrite with the same data, harmless.
+              saveConfigForRestore();
+
               setIsSubmitting(true);
               setSubmittingAction('cart');
               setSubmittingStep('cart:building');
@@ -2340,7 +2344,10 @@ export default function App({ productId, variantId }: AppProps = {}) {
             submittingRef.current = true;
             let shouldResetSubmitting = true;
             try {
-              
+              // Save BEFORE any async work — Buy Now redirects to /checkout once cart is set;
+              // if the user comes back, the configurator should still be on the same config.
+              saveConfigForRestore();
+
               setIsSubmitting(true);
               setSubmittingAction('buy');
               setSubmittingStep('buy:building');
