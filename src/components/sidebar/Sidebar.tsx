@@ -96,13 +96,17 @@ export function Sidebar({ descExpanded, setDescExpanded, onOpenRal, onAddToCart,
           </div>
           <div className="field-row-3">
             <NumInput configKey="lid_overhang" label="Lid Overhang" unit="in" max={6} min={2} step={0.5} />
-            {config.lid_type !== 'flat' && (
+            {config.lid_type !== 'flat' ? (
               <NumInput configKey="lid_pitch" label="Lid Pitch" unit="n/12" max={10} min={1} step={1} />
-            )}
-            {config.lid_type === 'flat' && (
-              <ToggleRow id="cross_break" label="Cross Break" tooltip="Adds a diagonal crease to slightly raise the center of the lid." />
+            ) : (
+              // Spacer: keeps Lid Overhang at 50% width so it visually matches the
+              // half-width Screen Height buttons below instead of stretching to full width.
+              <div className="field" aria-hidden="true" />
             )}
           </div>
+          {config.lid_type === 'flat' && (
+            <ToggleRow id="cross_break" label="Cross Break" tooltip="Adds a diagonal crease to slightly raise the center of the lid." />
+          )}
         </div>
 
         <ScreenSection />
