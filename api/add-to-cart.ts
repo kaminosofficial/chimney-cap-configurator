@@ -111,11 +111,29 @@ function computeCapPriceServerSide(c: CapOrderConfig, pricing: CapPricing): numb
     const lid_type = c.lid_type || 'flat';
     const material = c.material || 'stainless';
 
-    const bracketDims = lid_type === 'flat' ? pricing.CAP_BRACKETS.flat : pricing.CAP_BRACKETS.non_flat;
-    const bracket = w <= bracketDims.w_max && l <= bracketDims.l_max ? 'small' : 'large';
-    const multiplier = pricing.CAP_MULTIPLIERS[`${mount}_${lid_type}_${bracket}`] ?? 1;
+    let multiplier = 1;
+    let baseCost = 0;
 
-    let cost = (w + l) * multiplier;
+    if (mount === 'top_mount' && lid_type === 'flat') {
+        const totalDim = w + l + screen;
+        let bracket = '0_60';
+        if (totalDim > 100) {
+            bracket = '101_plus';
+        } else if (totalDim > 70) {
+            bracket = '71_100';
+        } else if (totalDim > 60) {
+            bracket = '61_70';
+        }
+        multiplier = pricing.CAP_MULTIPLIERS[`top_mount_flat_${bracket}`] ?? 1;
+        baseCost = totalDim * multiplier;
+    } else {
+        const bracketDims = lid_type === 'flat' ? pricing.CAP_BRACKETS.flat : pricing.CAP_BRACKETS.non_flat;
+        const bracket = w <= bracketDims.w_max && l <= bracketDims.l_max ? 'small' : 'large';
+        multiplier = pricing.CAP_MULTIPLIERS[`${mount}_${lid_type}_${bracket}`] ?? 1;
+        baseCost = (w + l) * multiplier;
+    }
+
+    let cost = baseCost;
     cost *= pricing.MATERIAL_MULT[material] ?? 1;
 
     const sur = pricing.CAP_SURCHARGES;

@@ -69,19 +69,19 @@ export interface CapPriceBreakdown {
   mount: string;
   lid_type: string;
   material: string;
-  bracket: 'small' | 'large';
+  bracket: string;
   bracketRule: string;     // human-readable, e.g. "W ≤ 33 ✓, L ≤ 67 ✓"
   multiplierKey: string;   // e.g. "skirt_flat_small"
   multiplier: number;
   multiplierFromSheet: boolean;
-  baseCost: number;        // (w + l) × multiplier
+  baseCost: number;        // (w + l) × multiplier or (w + l + h) × multiplier
   steps: CapPriceStep[];
   marginRate: number;
   total: number;
 }
 
 // Cap pricing pipeline (sheet-driven; no Call-for-Pricing branches — every input produces a price).
-//   1. base = (w + l) × MULT[mount_lid_bracket]                         (PDF 4/17/2023 multipliers)
+//   1. base = (w + l) × MULT[mount_lid_bracket] or (w + l + screen) × MULT[top_mount_flat_bracket] (PDF 5/1/2026 multipliers)
 //   2. × MATERIAL_MULT[material]                                        (copper = 3 from sheet)
 //   3. × surcharges (pitch / skirt / overhang / screen — all cumulative)
 //   4. × PAINTED_MULTIPLIER if powder_coat && !copper
@@ -98,18 +98,40 @@ export function computeCapPriceBreakdown(s: Partial<StoreData>): CapPriceBreakdo
   const vSkirt = s.vertical_skirt ?? 3;
   const overhang = s.lid_overhang ?? (lid_type === 'flat' ? 3 : 4);
 
-  // Bracket: small only if BOTH dimensions fit; large otherwise (no upper cap).
-  const bracketDims = lid_type === 'flat' ? PRICING.CAP_BRACKETS.flat : PRICING.CAP_BRACKETS.non_flat;
-  const wFits = w <= bracketDims.w_max;
-  const lFits = l <= bracketDims.l_max;
-  const bracket: 'small' | 'large' = wFits && lFits ? 'small' : 'large';
-  const bracketRule = `W ${wFits ? '≤' : '>'} ${bracketDims.w_max} ${wFits ? '✓' : '✗'}, L ${lFits ? '≤' : '>'} ${bracketDims.l_max} ${lFits ? '✓' : '✗'}`;
+  let bracket: string;
+  let bracketRule: string;
+  let multiplierKey: string;
+  let baseCost: number;
 
-  const multiplierKey = `${mount}_${lid_type}_${bracket}`;
+  if (mount === 'top_mount' && lid_type === 'flat') {
+    const totalDim = w + l + screen;
+    if (totalDim <= 60) {
+      bracket = '0_60';
+    } else if (totalDim <= 70) {
+      bracket = '61_70';
+    } else if (totalDim <= 100) {
+      bracket = '71_100';
+    } else {
+      bracket = '101_plus';
+    }
+    bracketRule = `W + L + H = ${w} + ${l} + ${screen} = ${totalDim}`;
+    multiplierKey = `top_mount_flat_${bracket}`;
+    const multiplier = PRICING.CAP_MULTIPLIERS[multiplierKey] ?? 1;
+    baseCost = totalDim * multiplier;
+  } else {
+    // Bracket: small only if BOTH dimensions fit; large otherwise (no upper cap).
+    const bracketDims = lid_type === 'flat' ? PRICING.CAP_BRACKETS.flat : PRICING.CAP_BRACKETS.non_flat;
+    const wFits = w <= bracketDims.w_max;
+    const lFits = l <= bracketDims.l_max;
+    bracket = wFits && lFits ? 'small' : 'large';
+    bracketRule = `W ${wFits ? '≤' : '>'} ${bracketDims.w_max} ${wFits ? '✓' : '✗'}, L ${lFits ? '≤' : '>'} ${bracketDims.l_max} ${lFits ? '✓' : '✗'}`;
+    multiplierKey = `${mount}_${lid_type}_${bracket}`;
+    const multiplier = PRICING.CAP_MULTIPLIERS[multiplierKey] ?? 1;
+    baseCost = (w + l) * multiplier;
+  }
+
   const multiplierFromSheet = multiplierKey in PRICING.CAP_MULTIPLIERS;
   const multiplier = PRICING.CAP_MULTIPLIERS[multiplierKey] ?? 1;
-
-  const baseCost = (w + l) * multiplier;
   let cost = baseCost;
   const steps: CapPriceStep[] = [];
 

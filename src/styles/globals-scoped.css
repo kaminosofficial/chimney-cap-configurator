@@ -813,7 +813,7 @@
     font-size: 10px;
     line-height: 1;
   }
-  .chimney-cap-configurator-root .viewport-controls .viewport-primary-btn.desktop-ar { display: none; }
+  .chimney-cap-configurator-root .viewport-controls .desktop-ar { display: none; }
   .chimney-cap-configurator-root .ar-btn-mobile {
     width: 44px;
     height: 44px;
