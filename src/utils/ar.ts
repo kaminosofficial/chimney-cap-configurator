@@ -61,6 +61,14 @@ function bakeScreenAlphaIntoMap(m: THREE.MeshStandardMaterial): void {
   tex.repeat.copy(alphaMap.repeat);
   tex.offset.copy(alphaMap.offset);
   tex.colorSpace = THREE.SRGBColorSpace;
+  // No mipmaps. With glTF alphaMode MASK, mipmapped alpha averages toward grey;
+  // the densely-tiled longer panels (E/W) then sit above the cutoff everywhere
+  // and render as a solid wall in AR — only the less-tiled N/S panels keep their
+  // mesh. Disabling mipmaps keeps the cutout valid at every distance, so all four
+  // screen panels stay see-through.
+  tex.generateMipmaps = false;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
   tex.needsUpdate = true;
 
   m.map = tex;
