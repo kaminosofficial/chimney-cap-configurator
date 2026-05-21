@@ -77,16 +77,8 @@ function bakeScreenAlphaIntoMap(m: THREE.MeshStandardMaterial): void {
   m.transparent = false; // alphaTest → glTF MASK mode (hard cutout, AR-correct)
 }
 
-/**
- * Build a back-facing duplicate of a mesh: cloned geometry with reversed
- * triangle winding and flipped normals. Used so the flat screen panels are
- * physically two-sided in the GLB. model-viewer's iOS AR path converts the
- * GLB to USDZ for Quick Look, and that conversion does not reliably carry the
- * material `doubleSided` flag — a single-sided panel then shows its mesh only
- * on the two camera-facing sides. Real back-face geometry can't be culled.
- */
-function makeBackFaceMesh(src: THREE.Mesh): THREE.Mesh {
-  const geo = (src.geometry as THREE.BufferGeometry).clone();
+/** Reverse triangle winding in place — handles indexed and non-indexed geometry. */
+function reverseWinding(geo: THREE.BufferGeometry): void {
   const index = geo.getIndex();
   if (index) {
     const a = index.array as Uint16Array | Uint32Array;
@@ -94,7 +86,37 @@ function makeBackFaceMesh(src: THREE.Mesh): THREE.Mesh {
       const t = a[i]; a[i] = a[i + 2]; a[i + 2] = t;
     }
     index.needsUpdate = true;
+    return;
   }
+  // Non-indexed (the lid triangle-soup geometries): swap vertex 0 and 2 of
+  // every triangle, across every attribute.
+  for (const name of Object.keys(geo.attributes)) {
+    const attr = geo.getAttribute(name) as THREE.BufferAttribute;
+    const sz = attr.itemSize;
+    const arr = attr.array as Float32Array;
+    for (let v = 0; v + 2 < attr.count; v += 3) {
+      for (let c = 0; c < sz; c++) {
+        const a0 = v * sz + c;
+        const a2 = (v + 2) * sz + c;
+        const t = arr[a0]; arr[a0] = arr[a2]; arr[a2] = t;
+      }
+    }
+    attr.needsUpdate = true;
+  }
+}
+
+/**
+ * Build a back-facing duplicate of a mesh: cloned geometry with reversed
+ * winding and flipped normals. Every non-instanced mesh is sent through this
+ * so the exported model is physically two-sided. model-viewer's iOS AR path
+ * converts the GLB to USDZ for Quick Look and that conversion does not reliably
+ * carry the material `doubleSided` flag — single-sided thin surfaces (screen
+ * panels, lid faces, overhang lips) then show on only the two camera-facing
+ * sides. Real back-face geometry can't be culled by any renderer.
+ */
+function makeBackFaceMesh(src: THREE.Mesh): THREE.Mesh {
+  const geo = (src.geometry as THREE.BufferGeometry).clone();
+  reverseWinding(geo);
   const normal = geo.getAttribute('normal');
   if (normal) {
     for (let i = 0; i < normal.count; i++) {
@@ -106,7 +128,7 @@ function makeBackFaceMesh(src: THREE.Mesh): THREE.Mesh {
   back.position.copy(src.position);
   back.quaternion.copy(src.quaternion);
   back.scale.copy(src.scale);
-  back.name = (src.name || 'screen') + '_back';
+  back.name = (src.name || 'mesh') + '_back';
   return back;
 }
 
@@ -115,7 +137,7 @@ export function exportToGLB(grp: THREE.Group): Promise<string> {
     const exportGroup = grp.clone();
     const scale = 0.0254 / SC;
     exportGroup.scale.set(scale, scale, scale);
-    const screenMeshes: THREE.Mesh[] = [];
+    const meshesToBackface: THREE.Mesh[] = [];
     exportGroup.traverse(child => {
       const mesh = child as THREE.Mesh;
       if (mesh.isMesh && mesh.material) {
@@ -126,20 +148,22 @@ export function exportToGLB(grp: THREE.Group): Promise<string> {
         if (m.alphaMap) {
           // Perforated screen mesh — keep it see-through in AR.
           bakeScreenAlphaIntoMap(m);
-          // Single-sided material + a real reversed back-face mesh (added
-          // below) so both faces survive the GLB→USDZ AR Quick Look conversion.
-          m.side = THREE.FrontSide;
-          screenMeshes.push(mesh);
         } else {
-          m.side = THREE.DoubleSide;
           m.transparent = false;
         }
+        // Single-sided material everywhere; real reversed back-face geometry is
+        // added below. The GLB→USDZ AR conversion does not reliably keep the
+        // doubleSided flag, so the model is made physically two-sided instead.
+        m.side = THREE.FrontSide;
         m.depthWrite = true;
         m.needsUpdate = true;
         mesh.material = m;
+        // Skip InstancedMesh (bolt instances — closed solids that don't need
+        // back-faces, and can't be rebuilt as a plain Mesh).
+        if (!(mesh as any).isInstancedMesh) meshesToBackface.push(mesh);
       }
     });
-    for (const sm of screenMeshes) {
+    for (const sm of meshesToBackface) {
       if (sm.parent) sm.parent.add(makeBackFaceMesh(sm));
     }
     exportGroup.updateMatrixWorld(true);
