@@ -1785,12 +1785,12 @@ export default function App({ productId, variantId }: AppProps = {}) {
               title="View in AR"
               aria-label="View in AR"
             >
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M3 7V4h3M17 4h3v3M3 17v3h3M17 20h3v-3"/>
-                <path d="M12 8l-4 2.3v4.4L12 17l4-2.3V10.3z"/>
-                <line x1="12" y1="17" x2="12" y2="12.5"/>
-                <line x1="8" y1="10.3" x2="12" y2="12.5"/>
-                <line x1="16" y1="10.3" x2="12" y2="12.5"/>
+              {/* AR cube — 3D box with "AR" on the front face */}
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M4 8 8 4.5h12L16 8z"/>
+                <path d="M16 8 20 4.5v11L16 19z"/>
+                <rect x="4" y="8" width="12" height="11" rx="1"/>
+                <text x="10" y="16.3" fontSize="7.5" fontWeight="700" textAnchor="middle" fill="currentColor" stroke="none" fontFamily="ui-sans-serif, system-ui, sans-serif">AR</text>
               </svg>
             </button>
           </div>

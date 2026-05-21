@@ -13,6 +13,62 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
+/**
+ * glTF has no `alphaMap` slot — alpha must live in the base-colour texture's
+ * alpha channel. The perforated screen-mesh panels use a separate grayscale
+ * `alphaMap` for their cutout, which GLTFExporter silently drops, so the
+ * screens render solid in AR. Fix: bake the alphaMap pattern into an RGBA
+ * `map` (RGB = the material colour, A = the cutout pattern) and switch the
+ * material to alphaTest — which the exporter writes as glTF alphaMode MASK,
+ * a hard cutout that renders see-through correctly in <model-viewer> AR.
+ */
+function bakeScreenAlphaIntoMap(m: THREE.MeshStandardMaterial): void {
+  const alphaMap = m.alphaMap;
+  const srcImage = alphaMap?.image as (CanvasImageSource & { width?: number; height?: number }) | undefined;
+  if (!alphaMap || !srcImage) return;
+
+  const w = srcImage.width || 64;
+  const h = srcImage.height || 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  ctx.drawImage(srcImage, 0, 0, w, h);
+  const img = ctx.getImageData(0, 0, w, h);
+  const data = img.data;
+
+  // sRGB 0-255 colour, robust against Three's colour management.
+  const hex = m.color ? m.color.getHexString() : '888888';
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+
+  for (let i = 0; i < data.length; i += 4) {
+    // Screen texture is black (transparent) with white strokes (opaque) —
+    // alphaMap reads luminance as alpha, so use the red channel as the mask.
+    data[i + 3] = data[i];
+    data[i] = r;
+    data[i + 1] = g;
+    data[i + 2] = b;
+  }
+  ctx.putImageData(img, 0, 0);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = alphaMap.wrapS;
+  tex.wrapT = alphaMap.wrapT;
+  tex.repeat.copy(alphaMap.repeat);
+  tex.offset.copy(alphaMap.offset);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+
+  m.map = tex;
+  m.alphaMap = null;
+  m.alphaTest = m.alphaTest > 0 ? m.alphaTest : 0.5;
+  m.transparent = false; // alphaTest → glTF MASK mode (hard cutout, AR-correct)
+}
+
 export function exportToGLB(grp: THREE.Group): Promise<string> {
   return new Promise((resolve, reject) => {
     const exportGroup = grp.clone();
@@ -26,7 +82,12 @@ export function exportToGLB(grp: THREE.Group): Promise<string> {
         m.envMapIntensity = 0;
         m.side = THREE.DoubleSide;
         (m as any).normalMap = null;
-        m.transparent = false;
+        if (m.alphaMap) {
+          // Perforated screen mesh — keep it see-through in AR.
+          bakeScreenAlphaIntoMap(m);
+        } else {
+          m.transparent = false;
+        }
         m.depthWrite = true;
         m.needsUpdate = true;
         mesh.material = m;
