@@ -1774,7 +1774,15 @@ export default function App({ productId, variantId }: AppProps = {}) {
             <button className="vp-btn" title="Front" onClick={() => cameraActions.front()}>
               &#9723;
             </button>
-            <button className="viewport-primary-btn desktop-ar viewport-action-btn" onClick={() => launchAR()}>View in AR</button>
+            <button className="vp-btn desktop-ar" title="View in AR" aria-label="View in AR" onClick={() => launchAR()}>
+              {/* AR cube — same glyph as the mobile AR button */}
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M4 8 8 4.5h12L16 8z"/>
+                <path d="M16 8 20 4.5v11L16 19z"/>
+                <rect x="4" y="8" width="12" height="11" rx="1"/>
+                <text x="10" y="16.3" fontSize="7.5" fontWeight="700" textAnchor="middle" fill="currentColor" stroke="none" fontFamily="ui-sans-serif, system-ui, sans-serif">AR</text>
+              </svg>
+            </button>
           </div>
 
           <div className="mobile-only-controls" style={{ position: 'absolute', bottom: 14, left: 14, display: 'flex', gap: 8, zIndex: 5 }}>

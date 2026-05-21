@@ -471,7 +471,7 @@ export function buildCap(capRoot: THREE.Group, config: CapConfig) {
   const pitchHeight = (shortSide / 2) * (config.lid_pitch / 12) * SC; // based on short side!
   const pitchDrop = oh * (config.lid_pitch / 12); // drop at the overhang
   
-  const lipDrop = 0.5 * SC;
+  const lipDrop = STANDING_SEAM_RIB_HEIGHT_IN * SC; // hangs the same height as the raised hip/ridge seams
 
   // -- Flat Lid --
   const lidFlat = new THREE.Group();
@@ -791,7 +791,7 @@ export function buildCap(capRoot: THREE.Group, config: CapConfig) {
     const oSE = [ hW, edgeY,  hL];
     const oSW = [-hW, edgeY,  hL];
 
-    const lipDrop = 0.5 * SC;
+    const lipDrop = STANDING_SEAM_RIB_HEIGHT_IN * SC; // hangs the same height as the raised hip/ridge seams
     const dNW = [-hW, edgeY - lipDrop, -hL];
     const dNE = [ hW, edgeY - lipDrop, -hL];
     const dSE = [ hW, edgeY - lipDrop,  hL];

@@ -813,7 +813,7 @@ header {
     font-size: 10px;
     line-height: 1;
   }
-  .viewport-controls .viewport-primary-btn.desktop-ar { display: none; }
+  .viewport-controls .desktop-ar { display: none; }
   .ar-btn-mobile {
     width: 44px;
     height: 44px;
