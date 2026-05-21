@@ -77,23 +77,61 @@ function bakeScreenAlphaIntoMap(m: THREE.MeshStandardMaterial): void {
   m.transparent = false; // alphaTest → glTF MASK mode (hard cutout, AR-correct)
 }
 
+/**
+ * Build a back-facing duplicate of a mesh: cloned geometry with reversed
+ * triangle winding and flipped normals. Used so the flat screen panels are
+ * physically two-sided in the GLB. model-viewer's iOS AR path converts the
+ * GLB to USDZ for Quick Look, and that conversion does not reliably carry the
+ * material `doubleSided` flag — a single-sided panel then shows its mesh only
+ * on the two camera-facing sides. Real back-face geometry can't be culled.
+ */
+function makeBackFaceMesh(src: THREE.Mesh): THREE.Mesh {
+  const geo = (src.geometry as THREE.BufferGeometry).clone();
+  const index = geo.getIndex();
+  if (index) {
+    const a = index.array as Uint16Array | Uint32Array;
+    for (let i = 0; i + 2 < a.length; i += 3) {
+      const t = a[i]; a[i] = a[i + 2]; a[i + 2] = t;
+    }
+    index.needsUpdate = true;
+  }
+  const normal = geo.getAttribute('normal');
+  if (normal) {
+    for (let i = 0; i < normal.count; i++) {
+      normal.setXYZ(i, -normal.getX(i), -normal.getY(i), -normal.getZ(i));
+    }
+    normal.needsUpdate = true;
+  }
+  const back = new THREE.Mesh(geo, src.material as THREE.Material);
+  back.position.copy(src.position);
+  back.quaternion.copy(src.quaternion);
+  back.scale.copy(src.scale);
+  back.name = (src.name || 'screen') + '_back';
+  return back;
+}
+
 export function exportToGLB(grp: THREE.Group): Promise<string> {
   return new Promise((resolve, reject) => {
     const exportGroup = grp.clone();
     const scale = 0.0254 / SC;
     exportGroup.scale.set(scale, scale, scale);
+    const screenMeshes: THREE.Mesh[] = [];
     exportGroup.traverse(child => {
       const mesh = child as THREE.Mesh;
       if (mesh.isMesh && mesh.material) {
         const m = (mesh.material as THREE.MeshStandardMaterial).clone();
         m.envMap = null;
         m.envMapIntensity = 0;
-        m.side = THREE.DoubleSide;
         (m as any).normalMap = null;
         if (m.alphaMap) {
           // Perforated screen mesh — keep it see-through in AR.
           bakeScreenAlphaIntoMap(m);
+          // Single-sided material + a real reversed back-face mesh (added
+          // below) so both faces survive the GLB→USDZ AR Quick Look conversion.
+          m.side = THREE.FrontSide;
+          screenMeshes.push(mesh);
         } else {
+          m.side = THREE.DoubleSide;
           m.transparent = false;
         }
         m.depthWrite = true;
@@ -101,6 +139,9 @@ export function exportToGLB(grp: THREE.Group): Promise<string> {
         mesh.material = m;
       }
     });
+    for (const sm of screenMeshes) {
+      if (sm.parent) sm.parent.add(makeBackFaceMesh(sm));
+    }
     exportGroup.updateMatrixWorld(true);
     const exporter = new GLTFExporter();
     exporter.parse(exportGroup, (result) => {
