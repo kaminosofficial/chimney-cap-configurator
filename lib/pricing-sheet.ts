@@ -271,11 +271,8 @@ function buildPricing(rows: Array<{ c?: Array<SheetCell> }>): PricingConstants {
                 normalizedKey === 'margin'
             ) {
                 // Column H (index 7) is the Cap configurator margin rate.
-                // Column A (index 0) is the Chase cover margin rate.
-                // Prioritize Column H for Cap margin, falling back to Column A.
+                // We ignore the Chase cover margin rate in Column A (index 0).
                 if (colIndex === 7) {
-                    kaminosMarginRate = value;
-                } else if (kaminosMarginRate === undefined && colIndex === 0) {
                     kaminosMarginRate = value;
                 }
             } else {
