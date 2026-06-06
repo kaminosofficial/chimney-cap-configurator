@@ -177,10 +177,6 @@ function buildCartProperties(c: CapOrderConfig): { key: string; value: string }[
     }
     props.push({ key: 'Lid Overhang', value: `${formatFrac(c.lid_overhang)}"` });
 
-    if (c.lid_type === 'standing_seam') {
-        props.push({ key: 'Seam Count', value: `${c.seam_count} per side` });
-    }
-
     props.push({ key: 'Material', value: getMaterialLabel(c.material) });
     if (c.powder_coat && c.material !== 'copper') {
         props.push({ key: 'Powder Coat', value: getColorLabel(c.powder_coat_color) });
