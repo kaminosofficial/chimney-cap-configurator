@@ -2,9 +2,12 @@ import { Html, Line } from '@react-three/drei';
 import { useConfigStore } from '../../store/configStore';
 import { SC } from '../../utils/geometry';
 import { formatFrac } from '../../utils/format';
-import { PriceBreakdownPanel } from '../sidebar/PriceBreakdownPanel';
+// NOTE: <PriceBreakdownPanel> usage is currently commented out below.
+// To re-enable, uncomment the import + the JSX. The component file
+// (../sidebar/PriceBreakdownPanel.tsx) is preserved.
+// import { PriceBreakdownPanel } from '../sidebar/PriceBreakdownPanel';
 
-const COLOR = '#00e5ff'; // Bright Cyan
+const COLOR = '#facc15'; // Yellow (matches chase configurator)
 
 function DimensionLine({ start, end, label, tickNormal }: { start: [number, number, number], end: [number, number, number], label: string, tickNormal: [number, number, number] }) {
     const dx = end[0] - start[0];
@@ -148,7 +151,8 @@ export function DimensionOverlay() {
                             <><br/>Flange Width: {formatFrac(config.flange_width)}"</>
                         )}
                     </div>
-                    <PriceBreakdownPanel />
+                    {/* Hidden for now; may re-enable later. Component is preserved. */}
+                    {/* <PriceBreakdownPanel /> */}
                 </div>
             </Html>
         </>

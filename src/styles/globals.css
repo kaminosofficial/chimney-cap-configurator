@@ -65,8 +65,14 @@ header {
 
 .app-layout { display: flex; flex: 1; overflow: hidden; position: relative; min-height: 0; height: 100%; }
 
-.viewport { flex: 1; position: relative; background: #cdc9c0; min-height: 0; }
-.viewport canvas { width: 100% !important; height: 100% !important; display: block; }
+/* IMPORTANT: .viewport bg MUST stay white. iOS Safari (especially iOS 26+)
+   derives the address-bar tint by sampling page pixels and the background-
+   color of elements near the top of the viewport — ignoring theme-color in
+   tabbed browsing. Keep .viewport white so the tint sample is white; the
+   visible grey comes from the .viewport-bg child below. */
+.viewport { flex: 1; position: relative; background: #ffffff; min-height: 0; }
+.viewport-bg { position: absolute; inset: 0; background: #dbd8d0; pointer-events: none; z-index: 0; }
+.viewport canvas { width: 100% !important; height: 100% !important; display: block; position: relative; z-index: 1; }
 
 .viewport-badge {
   position: absolute; bottom: 14px; left: 14px;
@@ -741,38 +747,53 @@ header {
 .mobile-divider { display: none; }
 
 @media (max-width: 767px) {
+  /* Mobile: convert from flex-divider split layout to a block-flow page so the
+     3D viewport can become position:sticky at top:0 while the sidebar scrolls
+     beneath it as part of the document. JS observer in shopify-entry.tsx
+     toggles .viewport between sticky and relative based on scroll position.
+
+     CRITICAL: html + body must be height:auto + overflow:visible too, otherwise
+     the locked desktop layout (html,body { height:100%; overflow:hidden }) traps
+     the document at viewport height and nothing scrolls. */
+  html, body { height: auto !important; overflow: visible !important; display: block !important; }
+  #root { height: auto !important; overflow: visible !important; display: block !important; }
   header { display: none; }
-  body { overflow: auto; }
-  .app-layout { flex-direction: column; min-height: 0; }
-  
-  .viewport { flex: none; height: var(--mobile-preview-size, 35%); min-height: 0; }
-  
-  .mobile-divider {
-    display: flex; justify-content: center; align-items: center;
-    height: 0; position: relative; z-index: 20; overflow: visible;
+  .app-layout { display: block !important; min-height: 0; height: auto !important; overflow: visible !important; }
+
+  .viewport {
+    display: block !important;
+    flex: none;
+    height: 35vh !important;
+    min-height: 0;
+    /* JS scroll observer toggles position between sticky/relative.
+       Default to relative so the canvas never bleeds above the widget. */
+    position: relative;
+    top: 0;
+    z-index: 100;
   }
-  
-  .mobile-divider-handle {
-    position: absolute; top: -12px;
-    width: 38px; height: 24px;
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 12px; display: flex; flex-direction: column;
-    justify-content: center; align-items: center; gap: 3px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-    cursor: ns-resize; touch-action: none; transition: background 0.2s;
+
+  /* Divider is purely for the desktop-style split layout; the sticky model
+     replaces it on mobile. */
+  .mobile-divider { display: none !important; }
+
+  .sidebar {
+    width: 100%;
+    min-width: unset;
+    max-width: none;
+    flex: none !important;
+    border-left: none;
+    border-top: 1px solid var(--border) !important;
+    max-height: none;
+    background: #ffffff;
+    height: auto !important;
+    overflow: visible !important;
   }
-  
-  .mobile-divider-handle::before, .mobile-divider-handle::after {
-    content: ""; display: block; width: 16px; height: 2px;
-    background: #a9a297; border-radius: 2px; transition: background 0.2s;
+  .sidebar-scroll {
+    padding: 16px;
+    height: auto !important;
+    overflow: visible !important;
+    flex: none !important;
   }
-  
-  .mobile-divider:active .mobile-divider-handle { background: #f0ebe2; }
-  .mobile-divider:active .mobile-divider-handle::before,
-  .mobile-divider:active .mobile-divider-handle::after { background: var(--accent); }
-  
-  .sidebar { width: 100%; min-width: unset; max-width: none; flex: 1; border-left: none; border-top: none; max-height: none; background: #ffffff; }
-  .sidebar-scroll { padding: 16px; }
   .sidebar-main-title {
     margin-bottom: 16px;
     font-size: 22px;

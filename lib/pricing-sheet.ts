@@ -51,7 +51,7 @@ const DEFAULT_PRICING: PricingConstants = {
     EXT_S_W: 4.245,
     EXT_S_L: 2.495,
     EXT_S_AREA: 0.040,
-    MARGIN_RATE: 0,
+    MARGIN_RATE: 3,
     HOLE_PRICE: 25,
     SKIRT_SURCHARGE: 75,
     SKIRT_THRESHOLD: 6,
@@ -84,24 +84,53 @@ const DEFAULT_PRICING: PricingConstants = {
         280: 200,
         290: 210,
     },
-    // Cap pricing is sheet-only — all multipliers, brackets, and surcharges come from the
-    // "Cap configurator" block (H/I). These empty defaults are intentional: prices look broken
-    // until the sheet rows are populated, and that mismatch is itself the signal to paste them.
-    CAP_MULTIPLIERS: {},
+    // Cap pricing is sheet-driven — values come from the "Cap configurator" H/I block.
+    // These defaults mirror the live sheet so a transient Google Sheets failure on a
+    // cold start does NOT make the configurator render $0 / NaN. The cap-equivalent of
+    // the chase $409 random-flash bug. Keep these in rough sync with the sheet; when
+    // the sheet successfully loads, its values override these.
+    CAP_MULTIPLIERS: {
+        skirt_flat_small: 6.86,
+        skirt_flat_large: 8.58,
+        skirt_hip_ridge_small: 9.57,
+        skirt_hip_ridge_large: 11.96,
+        skirt_hip_small: 9.95,
+        skirt_hip_large: 12.44,
+        skirt_standing_seam_small: 12.9,
+        skirt_standing_seam_large: 16.13,
+        pitched_skirt_flat_small: 8.1,
+        pitched_skirt_flat_large: 10.12,
+        pitched_skirt_hip_ridge_small: 9.96,
+        pitched_skirt_hip_ridge_large: 12.46,
+        pitched_skirt_hip_small: 10.67,
+        pitched_skirt_hip_large: 13.34,
+        pitched_skirt_standing_seam_small: 13.25,
+        pitched_skirt_standing_seam_large: 16.56,
+        top_mount_flat_0_60: 3.71,
+        top_mount_flat_61_70: 3.98,
+        top_mount_flat_71_100: 4.24,
+        top_mount_flat_101_plus: 4.24,
+        top_mount_hip_ridge_small: 8.46,
+        top_mount_hip_ridge_large: 10.58,
+        top_mount_hip_small: 9.2,
+        top_mount_hip_large: 11.5,
+        top_mount_standing_seam_small: 9.22,
+        top_mount_standing_seam_large: 11.53,
+    },
     CAP_BRACKETS: {
-        flat:     { w_max: 0, l_max: 0 },
-        non_flat: { w_max: 0, l_max: 0 },
+        flat:     { w_max: 33, l_max: 67 },
+        non_flat: { w_max: 45, l_max: 67 },
     },
     CAP_SURCHARGES: {
-        steep_pitch_pct: 0,
-        steep_pitch_threshold: 0,
-        tall_skirt_pct: 0,
-        tall_skirt_threshold: 0,
-        extra_overhang_pct: 0,
-        std_overhang_flat: 0,
-        std_overhang_non_flat: 0,
-        tall_screen_pct: 0,
-        tall_screen_threshold: 0,
+        steep_pitch_pct: 0.10,
+        steep_pitch_threshold: 5,
+        tall_skirt_pct: 0.05,
+        tall_skirt_threshold: 4,
+        extra_overhang_pct: 0.10,
+        std_overhang_flat: 3,
+        std_overhang_non_flat: 4,
+        tall_screen_pct: 0.05,
+        tall_screen_threshold: 16,
     },
 };
 

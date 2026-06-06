@@ -58,6 +58,42 @@ import cssText from './styles/globals-scoped.css?inline';
 
     patchViewportForIOS();
 
+    // 0. Force the mobile browser address bar to stay WHITE.
+    //    Shopify often renders <meta name="theme-color" content=""> in the head
+    //    BEFORE our defer-loaded IIFE runs. iOS Safari (especially iOS 26+)
+    //    derives the address-bar tint by sampling page pixels and/or the
+    //    background-color of fixed/sticky elements near the top, ignoring
+    //    theme-color in tabbed browsing. Remove existing tag(s) and insert a
+    //    fresh one, then re-assert on load/visibilitychange. As belt-and-
+    //    suspenders, also force html/body to white so the rubber-band
+    //    overscroll color is white.
+    const enforceThemeColor = () => {
+        const existing = document.querySelectorAll('meta[name="theme-color"]');
+        existing.forEach((el) => el.parentNode?.removeChild(el));
+        const meta = document.createElement('meta');
+        meta.setAttribute('name', 'theme-color');
+        meta.setAttribute('content', '#ffffff');
+        document.head.appendChild(meta);
+    };
+    enforceThemeColor();
+    if (document.readyState !== 'complete') {
+        window.addEventListener('load', enforceThemeColor, { once: true });
+    }
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') enforceThemeColor();
+    });
+
+    const BG_STYLE_ID = 'chimney-cap-configurator-bg';
+    if (!document.getElementById(BG_STYLE_ID)) {
+        const bgStyle = document.createElement('style');
+        bgStyle.id = BG_STYLE_ID;
+        bgStyle.textContent = `
+            html, body { background-color: #ffffff !important; }
+            html { background: #ffffff !important; }
+        `;
+        document.head.appendChild(bgStyle);
+    }
+
     // 1. Inject Google Fonts into document head (must be in light DOM for fonts to load)
     const FONT_ID = 'chimney-cap-configurator-fonts';
     if (!document.getElementById(FONT_ID)) {
@@ -119,16 +155,20 @@ import cssText from './styles/globals-scoped.css?inline';
         (mount.style as CSSStyleDeclaration).alignSelf = 'center';
     }
 
-    const originalInlineHeight = mount.style.height;
     const applyResponsiveMountHeight = () => {
         const isDesktop = window.innerWidth >= 768;
         if (isDesktop) {
             const desktopHeight = Math.max(640, Math.round(window.innerHeight * 0.8));
             mount!.style.height = `${desktopHeight}px`;
             mount!.style.minHeight = `${desktopHeight}px`;
+            mount!.style.overflow = '';
         } else {
-            mount!.style.height = originalInlineHeight || '100%';
-            mount!.style.minHeight = '';
+            // Mobile: sidebar grows to its natural height; document scrolls.
+            mount!.style.height = 'auto';
+            mount!.style.minHeight = 'auto';
+            // overflow:clip (not hidden) prevents the sticky 3D viewer from
+            // painting outside the widget's bounding box when it's pinned.
+            mount!.style.overflow = 'clip';
         }
     };
 
@@ -225,4 +265,86 @@ import cssText from './styles/globals-scoped.css?inline';
             <App productId={productId} variantId={variantId} />
         </React.StrictMode>
     );
+
+    // 10. Mobile sticky scroll observer.
+    //     On mobile the .viewport is position:relative by default. As the user
+    //     scrolls down past the widget top, we switch it to position:sticky;top:0
+    //     so the 3D model stays visible while the sidebar scrolls beneath it.
+    //     Scrolling back to the top releases it back to relative so the canvas
+    //     never paints above the widget boundary.
+    //
+    //     We observe a zero-height light-DOM spacer placed immediately before
+    //     the mount element. Light-DOM siblings have reliable bounding rects
+    //     unaffected by Shadow-DOM sticky layouts (iOS WebKit otherwise reports
+    //     mount's bounding rect as stuck at top:0 once an inner sticky engages).
+    const setupMobileStickyScroll = () => {
+        const shadow = mount!.shadowRoot;
+        if (!shadow) return;
+
+        const SPACER_CLASS = 'chimney-cap-configurator-spacer';
+        let spacer = document.querySelector(`.${SPACER_CLASS}`) as HTMLElement | null;
+        if (!spacer && mount!.parentNode) {
+            spacer = document.createElement('div');
+            spacer.className = SPACER_CLASS;
+            spacer.style.cssText = 'width:100%;height:0px;margin:0;padding:0;border:none;pointer-events:none;';
+            mount!.parentNode.insertBefore(spacer, mount);
+        }
+
+        const trySetup = (attempt = 0) => {
+            const viewportEl = shadow.querySelector('.viewport') as HTMLElement | null;
+            if (!viewportEl) {
+                if (attempt < 20) setTimeout(() => trySetup(attempt + 1), 150);
+                return;
+            }
+
+            let currentlySticky = false;
+            const setSticky = (stick: boolean) => {
+                if (stick === currentlySticky) return;
+                currentlySticky = stick;
+                if (stick) {
+                    viewportEl.style.position = 'sticky';
+                    viewportEl.style.top = '0';
+                } else {
+                    viewportEl.style.position = 'relative';
+                    viewportEl.style.top = '';
+                }
+            };
+
+            const isMobile = () => window.innerWidth < 768;
+
+            // Primary detection: IntersectionObserver on the light-DOM spacer.
+            // IO fires reliably across iOS momentum/inertial scrolling, so we
+            // never get stuck in the sticky state after rebound.
+            const refEl: HTMLElement = spacer || mount!;
+            const io = new IntersectionObserver(
+                (entries) => {
+                    if (!isMobile()) { setSticky(false); return; }
+                    const entry = entries[0];
+                    if (!entry) return;
+                    const top = entry.boundingClientRect.top;
+                    setSticky(!entry.isIntersecting && top < 0);
+                },
+                { threshold: [0, 1], rootMargin: '0px' }
+            );
+            io.observe(refEl);
+
+            // Belt-and-suspenders fallback: a scroll listener that force-releases
+            // sticky whenever the spacer is at/below the viewport top.
+            const onScroll = () => {
+                if (!isMobile()) { setSticky(false); return; }
+                const top = refEl.getBoundingClientRect().top;
+                if (top > 0 && currentlySticky) setSticky(false);
+                else if (top <= 0 && !currentlySticky) setSticky(true);
+            };
+
+            window.addEventListener('scroll', onScroll, { capture: true, passive: true });
+            window.addEventListener('resize', onScroll, { passive: true });
+            window.addEventListener('touchend', onScroll, { passive: true });
+            onScroll();
+        };
+
+        setTimeout(() => trySetup(), 300);
+    };
+
+    setupMobileStickyScroll();
 })();

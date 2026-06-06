@@ -129,7 +129,7 @@ export const DEFAULT_MODEL_COEFFICIENTS: Record<string, number> = {
 };
 
 export const DEFAULT_GAUGE_MULT: Record<number, number> = {
-  24: 3.2,
+  24: 3.39,
   22: 4,
   20: 4.8,
 };

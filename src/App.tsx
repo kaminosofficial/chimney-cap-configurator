@@ -20,6 +20,33 @@ declare const __LOCAL_IP__: string | undefined;
 /** Debug flag â€” set `window.__chaseDebug = true` in console to enable verbose logging. */
 const DEBUG = () => !!(window as any).__chaseDebug;
 
+function IconCameraReset() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="1 4 1 10 7 10" />
+      <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+    </svg>
+  );
+}
+
+function IconCameraTop() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="4" width="20" height="16" rx="2" fill="currentColor" fillOpacity="0.05" />
+      <text x="12" y="15.5" fontSize="11" fontWeight="900" textAnchor="middle" fill="currentColor" stroke="none" fontFamily="ui-sans-serif, system-ui, sans-serif">T</text>
+    </svg>
+  );
+}
+
+function IconCameraFront() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="4" width="20" height="16" rx="2" fill="currentColor" fillOpacity="0.05" />
+      <text x="12" y="15.5" fontSize="11" fontWeight="900" textAnchor="middle" fill="currentColor" stroke="none" fontFamily="ui-sans-serif, system-ui, sans-serif">F</text>
+    </svg>
+  );
+}
+
 interface AppProps {
   productId?: string;
   variantId?: string;
@@ -1572,7 +1599,6 @@ export default function App({ productId, variantId }: AppProps = {}) {
   const [arActive, setArActive] = useState(false);
   const [qrActive, setQrActive] = useState(false);
   const [arLoading, setArLoading] = useState(false);
-  const [descExpanded, setDescExpanded] = useState(false);
   const [ralOpen, setRalOpen] = useState(false);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1762,17 +1788,22 @@ export default function App({ productId, variantId }: AppProps = {}) {
         style={{ '--mobile-preview-size': `${mobilePreviewSize}%` } as any}
       >
         <div className="viewport">
+          {/* Inner non-sticky background layer. The parent .viewport is white
+              so iOS Safari (which samples element backgrounds near the top of
+              the page for the address-bar tint) sees white. This layer holds
+              the visible grey behind the transparent 3D canvas. */}
+          <div className="viewport-bg" aria-hidden="true" />
           <CapViewer />
 
           <div className="viewport-controls">
-            <button className="vp-btn" title="Reset" onClick={() => cameraActions.reset()}>
-              &#8635;
+            <button className="vp-btn" title="Reset" onClick={() => cameraActions.reset()} aria-label="Reset Camera">
+              <IconCameraReset />
             </button>
-            <button className="vp-btn" title="Top" onClick={() => cameraActions.top()}>
-              &#8868;
+            <button className="vp-btn" title="Top" onClick={() => cameraActions.top()} aria-label="Top View">
+              <IconCameraTop />
             </button>
-            <button className="vp-btn" title="Front" onClick={() => cameraActions.front()}>
-              &#9723;
+            <button className="vp-btn" title="Front" onClick={() => cameraActions.front()} aria-label="Front View">
+              <IconCameraFront />
             </button>
             <button className="vp-btn desktop-ar" title="View in AR" aria-label="View in AR" onClick={() => launchAR()}>
               {/* AR cube — same glyph as the mobile AR button */}
@@ -1879,8 +1910,6 @@ export default function App({ productId, variantId }: AppProps = {}) {
         </div>
 
         <Sidebar
-          descExpanded={descExpanded}
-          setDescExpanded={setDescExpanded}
           onOpenRal={() => setRalOpen(true)}
           isSubmitting={isSubmitting}
           submittingAction={submittingAction}

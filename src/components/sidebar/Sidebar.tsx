@@ -1,14 +1,10 @@
-import { useState } from 'react';
 import { useConfigStore } from '../../store/configStore';
 import { NumInput, ToggleRow, Chips, MountStyleSection, LidTypeSection, ScreenSection } from './Inputs';
 import { PowderCoatSection } from './PowderCoatSection';
 import { PriceDisplay } from './PriceDisplay';
 import { CartRow } from './CartRow';
-import { NotesField } from './NotesField';
 
 interface SidebarProps {
-  descExpanded: boolean;
-  setDescExpanded: (v: boolean) => void;
   onOpenRal: () => void;
   onAddToCart: () => void;
   onBuyNow: () => void;
@@ -17,41 +13,13 @@ interface SidebarProps {
   submittingStep?: string;
 }
 
-export function Sidebar({ descExpanded, setDescExpanded, onOpenRal, onAddToCart, onBuyNow, isSubmitting = false, submittingAction = null, submittingStep = '' }: SidebarProps) {
+export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, isSubmitting = false, submittingAction = null, submittingStep = '' }: SidebarProps) {
   const config = useConfigStore();
-  const [introExpanded, setIntroExpanded] = useState(false);
 
   return (
     <div className="sidebar">
       <div className={`sidebar-scroll${isSubmitting ? ' sidebar-scroll--disabled' : ''}`}>
         <h1 className="sidebar-main-title">Multi-Flue Chimney Cap Configurator</h1>
-
-        <section className={`project-info-card${introExpanded ? ' open' : ''}`}>
-          <button
-            className={`project-info-toggle${introExpanded ? ' open' : ''}`}
-            onClick={() => setIntroExpanded(!introExpanded)}
-            aria-expanded={introExpanded}
-            aria-controls="project-info-panel"
-          >
-            <span className="project-info-toggle-text">Project Info &amp; Instructions</span>
-            <span className="project-info-toggle-icon" aria-hidden="true" />
-          </button>
-
-          {introExpanded && (
-            <div id="project-info-panel" className="project-info-body">
-              <div className="product-desc">
-                <div className={`product-desc-text${descExpanded ? ' expanded' : ''}`}>
-                  Kaminos multi-flue caps are custom-fabricated to your exact measurements. 
-                  Choose from premium stainless steel or copper - each built to outlast and 
-                  outperform standard covers. Backed by our lifetime warranty against rust and corrosion.
-                </div>
-                <button className="desc-toggle" onClick={() => setDescExpanded(!descExpanded)}>
-                  {descExpanded ? 'Show Less' : 'Read More'}
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
 
         <MountStyleSection />
         <LidTypeSection />
@@ -131,13 +99,6 @@ export function Sidebar({ descExpanded, setDescExpanded, onOpenRal, onAddToCart,
           )}
         </div>
 
-        <div className="section">
-          <div className="section-title">
-            <span className="section-title-label">Special Notes</span>
-            <span className="section-title-meta">(optional)</span>
-          </div>
-          <NotesField />
-        </div>
       </div>
 
       <div className="price-bar">
