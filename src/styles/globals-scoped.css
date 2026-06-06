@@ -124,6 +124,17 @@
 }
 .chimney-cap-configurator-root .dim-overlay .dim-close:hover { color: #333; background: rgba(0,0,0,0.05); }
 .chimney-cap-configurator-root .dim-overlay span { color: var(--accent); font-weight: 600; }
+.chimney-cap-configurator-root .dim-overlay .dim-show-labels-toggle {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 10px; padding-top: 8px;
+  border-top: 1px solid rgba(0,0,0,0.08);
+  font-family: var(--sans); font-size: 11px;
+  color: #555; cursor: pointer; user-select: none;
+}
+.chimney-cap-configurator-root .dim-overlay .dim-show-labels-toggle input[type="checkbox"] {
+  width: 14px; height: 14px; margin: 0; cursor: pointer; accent-color: var(--accent);
+}
+.chimney-cap-configurator-root .dim-overlay .dim-show-labels-toggle span { color: #555; font-weight: 500; }
 
 .chimney-cap-configurator-root .sidebar {
   width: 38%; min-width: 340px; max-width: 520px; background: #ffffff;

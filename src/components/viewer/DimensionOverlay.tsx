@@ -2,10 +2,6 @@ import { Html, Line } from '@react-three/drei';
 import { useConfigStore } from '../../store/configStore';
 import { SC } from '../../utils/geometry';
 import { formatFrac } from '../../utils/format';
-// NOTE: <PriceBreakdownPanel> usage is currently commented out below.
-// To re-enable, uncomment the import + the JSX. The component file
-// (../sidebar/PriceBreakdownPanel.tsx) is preserved.
-// import { PriceBreakdownPanel } from '../sidebar/PriceBreakdownPanel';
 
 const COLOR = '#facc15'; // Yellow (matches chase configurator)
 
@@ -63,7 +59,11 @@ function DimensionLine({ start, end, label, tickNormal }: { start: [number, numb
 export function DimensionOverlay() {
     const config = useConfigStore(s => s);
 
-    if (!config.showDimensions) return null;
+    // Gate on showDimLabels (not showDimensions). The popup summary lives in
+    // App.tsx's .dim-overlay; this component only renders the in-3D yellow
+    // arrows/labels. Default is OFF — user opts in via "Show Labels" toggle
+    // inside the popup so opening dimensions doesn't immediately clutter view.
+    if (!config.showDimLabels) return null;
 
     const w = config.width * SC;
     const l = config.length * SC;
@@ -103,58 +103,6 @@ export function DimensionOverlay() {
             {labels.map((sl) => (
                 <DimensionLine key={sl.key} start={sl.p1} end={sl.p2} label={sl.label} tickNormal={sl.tickNormal} />
             ))}
-
-            {/* 2D Summary Panel Overlay */}
-            <Html fullscreen zIndexRange={[100, 0]} style={{ pointerEvents: 'none' }}>
-                <div style={{
-                    position: 'absolute',
-                    top: '24px',
-                    right: '24px',
-                    background: 'rgba(252, 252, 252, 0.95)',
-                    padding: '16px 24px 16px 16px',
-                    borderRadius: '12px',
-                    boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
-                    pointerEvents: 'auto',
-                    fontFamily: 'sans-serif',
-                    color: '#444',
-                    minWidth: '220px',
-                }}>
-                    <button 
-                        onClick={() => config.set({ showDimensions: false })}
-                        style={{
-                            position: 'absolute',
-                            top: '8px',
-                            right: '12px',
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            color: '#999',
-                            fontSize: '18px',
-                            lineHeight: 1,
-                            padding: 0,
-                        }}
-                        title="Hide Dimensions"
-                    >
-                        ×
-                    </button>
-                    <div style={{ fontWeight: 500, fontSize: '14px', marginBottom: '8px', color: '#333' }}>
-                        {formatFrac(config.width)}" W × {formatFrac(config.length)}" L {config.mount !== 'top_mount' ? `× ${formatFrac(config.vertical_skirt)}" Skirt` : ''}
-                    </div>
-                    <div style={{ fontSize: '13px', color: '#666', lineHeight: '1.6' }}>
-                        Screen Height: {formatFrac(config.screen_height)}"
-                        <br/>
-                        Lid Overhang: {formatFrac(config.lid_overhang)}"
-                        {config.mount !== 'top_mount' && (
-                            <><br/>Horizontal Skirt: {formatFrac(config.horizontal_skirt)}"</>
-                        )}
-                        {config.mount === 'top_mount' && (
-                            <><br/>Flange Width: {formatFrac(config.flange_width)}"</>
-                        )}
-                    </div>
-                    {/* Hidden for now; may re-enable later. Component is preserved. */}
-                    {/* <PriceBreakdownPanel /> */}
-                </div>
-            </Html>
         </>
     );
 }

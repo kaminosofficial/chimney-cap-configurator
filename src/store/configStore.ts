@@ -45,7 +45,10 @@ export interface CapConfig {
   // Viewer state
   orbitEnabled: boolean;
   setOrbitEnabled: (v: boolean) => void;
-  showDimensions: boolean;
+  showDimensions: boolean;       // dim-overlay popup (summary in top-right of viewer)
+  showDimLabels: boolean;        // 3D yellow labels/arrows on the model itself
+                                 // (gated separately from the popup so opening
+                                 // the popup doesn't immediately clutter the view)
 
   set: (partial: Partial<CapConfig>) => void;
 }
@@ -206,6 +209,7 @@ const initial: StoreData = {
   price: 0,
   orbitEnabled: true,
   showDimensions: false,
+  showDimLabels: false,
 };
 initial.price = computeCapPrice(initial);
 

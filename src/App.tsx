@@ -1776,9 +1776,16 @@ export default function App({ productId, variantId }: AppProps = {}) {
     }
   }
 
-  const displayDimLines = [
-    `${formatFrac(config.width)}" W x ${formatFrac(config.length)}" L`,
-  ];
+  const displayDimLines = (() => {
+    const lines = [`${formatFrac(config.width)}" W x ${formatFrac(config.length)}" L`];
+    if (config.mount === 'top_mount') {
+      lines.push(`Flange: ${formatFrac(config.flange_width)}"`);
+    } else {
+      lines.push(`V-Skirt: ${formatFrac(config.vertical_skirt)}"`);
+    }
+    lines.push(`Screen: ${formatFrac(config.screen_height)}"`);
+    return lines;
+  })();
 
   return (
     <>
@@ -1839,7 +1846,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
               <>
                 <button
                   className="dim-close"
-                  onClick={(e) => { e.stopPropagation(); setConfig({ showDimensions: false }); }}
+                  onClick={(e) => { e.stopPropagation(); setConfig({ showDimensions: false, showDimLabels: false }); }}
                   title="Close dimensions"
                   aria-label="Close dimensions"
                 >
@@ -1848,6 +1855,14 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 {displayDimLines.map((line, i) => (
                   <div key={i}>{line}</div>
                 ))}
+                <label className="dim-show-labels-toggle">
+                  <input
+                    type="checkbox"
+                    checked={config.showDimLabels}
+                    onChange={(e) => setConfig({ showDimLabels: e.target.checked })}
+                  />
+                  <span>Show Labels</span>
+                </label>
               </>
             ) : (
               <button
