@@ -41,6 +41,9 @@ export interface CapConfig {
   notes: string;
 
   price: number;
+  pricingLoaded: boolean;        // false until /api/pricing resolves; gates
+                                 // PriceDisplay so we never flash a stale local
+                                 // price before the sheet-driven total renders.
 
   // Viewer state
   orbitEnabled: boolean;
@@ -207,6 +210,7 @@ const initial: StoreData = {
   quantity: 1,
   notes: '',
   price: 0,
+  pricingLoaded: false,
   orbitEnabled: true,
   showDimensions: false,
   showDimLabels: false,
@@ -293,5 +297,5 @@ export const useConfigStore = create<CapConfig>()(
 
 onPricingLoaded(() => {
   const state = useConfigStore.getState();
-  useConfigStore.setState({ price: computeCapPrice(state) });
+  useConfigStore.setState({ price: computeCapPrice(state), pricingLoaded: true });
 });

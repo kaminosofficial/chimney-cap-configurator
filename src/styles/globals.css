@@ -136,6 +136,22 @@ header {
 }
 .dim-overlay .dim-show-labels-toggle span { color: #555; font-weight: 500; }
 
+/* Price loading shimmer — shown by PriceDisplay until /api/pricing resolves
+   so a stale local-fallback total never flashes before the sheet-driven one. */
+.price-value-loading-shimmer {
+  display: inline-block;
+  width: 70px;
+  height: 20px;
+  background-color: rgba(18, 18, 18, 0.08);
+  border-radius: 4px;
+  animation: price-shimmer-pulse 1.5s ease-in-out infinite;
+  vertical-align: middle;
+}
+@keyframes price-shimmer-pulse {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 0.25; }
+}
+
 .sidebar {
   width: 38%; min-width: 340px; max-width: 520px; background: #ffffff;
   border-left: none; display: flex; flex-direction: column; overflow: hidden; min-height: 0; height: 100%; align-self: stretch;
