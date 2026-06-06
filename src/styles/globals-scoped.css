@@ -508,50 +508,6 @@
 .chimney-cap-configurator-root .notes-textarea:focus-visible { border-color: rgba(18, 18, 18, 0.08); box-shadow: none; }
 .chimney-cap-configurator-root .notes-textarea::placeholder { color: var(--text-helper); opacity: 1; }
 
-/* ---- Export PDF button (above cart row) ---- */
-.chimney-cap-configurator-root .export-pdf-btn {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  height: 42px;
-  margin-bottom: 10px;
-  background: #fff;
-  border: 1px solid rgba(18, 18, 18, 0.12);
-  border-radius: 6px;
-  color: rgb(18, 18, 18);
-  font-family: var(--sans);
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.15s, border-color 0.18s, color 0.15s, box-shadow 0.15s;
-  letter-spacing: 0.01em;
-}
-.chimney-cap-configurator-root .export-pdf-btn:hover {
-  background: #faf6ef;
-  border-color: rgb(209, 179, 130);
-  color: rgb(180, 140, 80);
-  box-shadow: 0 1px 4px rgba(209, 179, 130, 0.18);
-}
-.chimney-cap-configurator-root .export-pdf-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-/* ---- PDF capture spinner ---- */
-.chimney-cap-configurator-root .pdf-capture-spinner {
-  width: 36px;
-  height: 36px;
-  border: 3px solid rgba(209, 179, 130, 0.2);
-  border-top-color: rgb(209, 179, 130);
-  border-radius: 50%;
-  animation: pdf-spin 0.75s linear infinite;
-}
-@keyframes pdf-spin {
-  to { transform: rotate(360deg); }
-}
-
 .chimney-cap-configurator-root .cart-row { display: flex; gap: 12px; align-items: flex-end; margin-top: 14px; }
 
 /* ---- Quantity selector (Shopify Dawn-style) ---- */
