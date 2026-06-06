@@ -1,5 +1,6 @@
 import { useConfigStore } from '../../store/configStore';
 import { NumInput, ToggleRow, Chips, MountStyleSection, LidTypeSection, ScreenSection } from './Inputs';
+import { InfoTooltip } from './InfoTooltip';
 import { PowderCoatSection } from './PowderCoatSection';
 import { PriceDisplay } from './PriceDisplay';
 import { CartRow } from './CartRow';
@@ -8,12 +9,13 @@ interface SidebarProps {
   onOpenRal: () => void;
   onAddToCart: () => void;
   onBuyNow: () => void;
+  onExportPdf: () => void;
   isSubmitting?: boolean;
   submittingAction?: 'cart' | 'buy' | null;
   submittingStep?: string;
 }
 
-export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, isSubmitting = false, submittingAction = null, submittingStep = '' }: SidebarProps) {
+export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, onExportPdf, isSubmitting = false, submittingAction = null, submittingStep = '' }: SidebarProps) {
   const config = useConfigStore();
 
   return (
@@ -43,7 +45,7 @@ export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, isSubmitting = false
               <NumInput configKey="vertical_skirt" label="Vertical Skirt" unit="in" max={9} min={1} step={0.25} />
               <NumInput configKey="horizontal_skirt" label="Horizontal Skirt" unit="in" max={9} min={1} step={0.25} />
             </div>
-            <ToggleRow id="drip_edge" label="Drip Edge" tooltip="A drip edge extends beyond the skirt to direct rainwater away." />
+            <ToggleRow id="drip_edge" label="Drip Edge" tooltip="A drip edge extends beyond the skirt at a 45-degree angle, directing rainwater away from the chase to prevent water damage." />
           </div>
         )}
 
@@ -81,7 +83,8 @@ export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, isSubmitting = false
 
         <div className="section">
           <div className="section-title">
-            <span className="section-title-label">Material & Finish</span>
+            <span className="section-title-label">Material</span>
+            <InfoTooltip text="Stainless steel is durable and cost-effective. Copper develops a natural patina over time and offers superior longevity." />
           </div>
           <Chips<'stainless' | 'copper'>
             options={[
@@ -93,7 +96,7 @@ export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, isSubmitting = false
           />
           {config.material === 'stainless' && (
             <>
-              <ToggleRow id="powder_coat" label="Powder Coating" tooltip="Add a baked-on color finish." />
+              <ToggleRow id="powder_coat" label="Powder Coating" tooltip="Powder coating adds a baked-on color finish for UV protection and a custom appearance." />
               {config.powder_coat && <PowderCoatSection onOpenRal={onOpenRal} />}
             </>
           )}
@@ -105,7 +108,7 @@ export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, isSubmitting = false
         <div className="price-header">
           <PriceDisplay />
         </div>
-        <CartRow onAddToCart={onAddToCart} onBuyNow={onBuyNow} isSubmitting={isSubmitting} submittingAction={submittingAction} submittingStep={submittingStep} />
+        <CartRow onAddToCart={onAddToCart} onBuyNow={onBuyNow} onExportPdf={onExportPdf} isSubmitting={isSubmitting} submittingAction={submittingAction} submittingStep={submittingStep} />
       </div>
     </div>
   );
