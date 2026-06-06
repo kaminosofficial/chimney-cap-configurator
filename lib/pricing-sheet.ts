@@ -167,7 +167,7 @@ function parseSheetNumber(cell?: SheetCell): number | null {
 }
 
 function extractKeyValuePairs(row: { c?: Array<SheetCell> }) {
-    const pairs: Array<{ key: string; value: number }> = [];
+    const pairs: Array<{ key: string; value: number; colIndex: number }> = [];
     const cells = row.c ?? [];
 
     for (let i = 0; i < cells.length - 1; i++) {
@@ -181,7 +181,7 @@ function extractKeyValuePairs(row: { c?: Array<SheetCell> }) {
         const num = parseSheetNumber(valueCell);
         if (num == null || !Number.isFinite(num)) continue;
 
-        pairs.push({ key, value: num });
+        pairs.push({ key, value: num, colIndex: i });
     }
 
     return pairs;
@@ -219,7 +219,7 @@ function buildPricing(rows: Array<{ c?: Array<SheetCell> }>): PricingConstants {
     let kaminosMarginRate: number | undefined;
 
     for (const row of rows) {
-        for (const { key, value } of extractKeyValuePairs(row)) {
+        for (const { key, value, colIndex } of extractKeyValuePairs(row)) {
             const trimmedKey = key.trim();
             const upperKey = trimmedKey.toUpperCase();
             const lowerKey = trimmedKey.toLowerCase();
@@ -270,7 +270,14 @@ function buildPricing(rows: Array<{ c?: Array<SheetCell> }>): PricingConstants {
                 normalizedKey === 'marginrate' ||
                 normalizedKey === 'margin'
             ) {
-                kaminosMarginRate = value;
+                // Column H (index 7) is the Cap configurator margin rate.
+                // Column A (index 0) is the Chase cover margin rate.
+                // Prioritize Column H for Cap margin, falling back to Column A.
+                if (colIndex === 7) {
+                    kaminosMarginRate = value;
+                } else if (kaminosMarginRate === undefined && colIndex === 0) {
+                    kaminosMarginRate = value;
+                }
             } else {
                 pricing[trimmedKey] = value;
             }
