@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Sidebar } from './components/sidebar/Sidebar';
+import { PdfPreviewModal } from './components/pdf/PdfPreviewModal';
 import { CapViewer } from './components/viewer/CapViewer';
 import { useConfigStore, saveConfigForRestore, restoreConfigIfNeeded } from './store/configStore';
 
@@ -1600,6 +1601,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
   const [qrActive, setQrActive] = useState(false);
   const [arLoading, setArLoading] = useState(false);
   const [ralOpen, setRalOpen] = useState(false);
+  const [pdfOpen, setPdfOpen] = useState(false);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittingAction, setSubmittingAction] = useState<'cart' | 'buy' | null>(null);
@@ -1911,6 +1913,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
 
         <Sidebar
           onOpenRal={() => setRalOpen(true)}
+          onExportPdf={() => setPdfOpen(true)}
           isSubmitting={isSubmitting}
           submittingAction={submittingAction}
           submittingStep={submittingStep}
@@ -2541,6 +2544,12 @@ export default function App({ productId, variantId }: AppProps = {}) {
       </div>
 
       <RalModal open={ralOpen} onClose={() => setRalOpen(false)} />
+
+      <PdfPreviewModal
+        open={pdfOpen}
+        onClose={() => setPdfOpen(false)}
+        captureSnapshot={() => captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true })}
+      />
 
       {(() => {
         const portalTarget = (window as any).__chasePortalContainer as HTMLElement | undefined;
