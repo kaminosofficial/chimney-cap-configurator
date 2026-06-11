@@ -18,21 +18,14 @@ export async function generatePdf(element: HTMLElement | null): Promise<Blob | n
     return null;
   }
 
-  // Pull the report out of its scaled preview wrapper so it rasterizes at
-  // natural size with no transform.
-  const originalStyle = element.style.cssText;
-  element.style.position = 'absolute';
-  element.style.left = '-9999px';
-  element.style.top = '0';
-  element.style.transform = 'none';
-  element.style.display = 'block';
-
   try {
     // Ensure fonts are settled so glyph metrics match the preview.
     if (document.fonts && document.fonts.ready) {
       try { await document.fonts.ready; } catch { /* non-fatal */ }
     }
 
+    // offsetWidth/Height are the element's true layout size and are unaffected
+    // by the preview wrapper's CSS transform, so the capture is full-size.
     const width = element.offsetWidth || 794;
     const height = element.offsetHeight || 1123;
 
@@ -41,7 +34,10 @@ export async function generatePdf(element: HTMLElement | null): Promise<Blob | n
       backgroundColor: '#ffffff',
       width,
       height,
-      cacheBust: true,
+      // NOTE: do NOT enable cacheBust — it appends a query string to every
+      // resource URL, which corrupts the inline data: URIs (logo + hero image)
+      // and produces a blank capture / hang.
+      //
       // The report renders in the system fallback font (Jost is not loaded), so
       // there is nothing to embed — skipping avoids slow/failing font fetches
       // and keeps the output identical to the preview.
@@ -73,8 +69,6 @@ export async function generatePdf(element: HTMLElement | null): Promise<Blob | n
   } catch (error) {
     console.error('Error generating PDF:', error);
     return null;
-  } finally {
-    element.style.cssText = originalStyle;
   }
 }
 
