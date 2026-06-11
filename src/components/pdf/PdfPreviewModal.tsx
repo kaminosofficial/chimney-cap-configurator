@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { generatePdf } from '../../utils/pdfGenerator';
+import { generatePdf, deliverPdf } from '../../utils/pdfGenerator';
 import { PdfReport } from './PdfReport';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -86,10 +86,12 @@ export function PdfPreviewModal({ open, onClose, captureSnapshot }: PdfPreviewMo
     setIsDownloading(true);
     try {
       const dateStr = new Date().toISOString().slice(0, 10);
+      const filename = `KAMINOS-ChimneyCap-${dateStr}.pdf`;
       // Query within our own ref (not document.getElementById) so it resolves
       // even when the configurator runs inside a Shopify Shadow DOM.
       const el = (reportRef.current?.querySelector('#print-mount') ?? null) as HTMLElement | null;
-      await generatePdf(el, `KAMINOS-ChimneyCap-${dateStr}.pdf`);
+      const blob = await generatePdf(el);
+      if (blob) await deliverPdf(blob, filename);
     } finally {
       setIsDownloading(false);
     }

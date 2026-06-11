@@ -1,32 +1,51 @@
-import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import { toCanvas } from 'html-to-image';
 
-// Renders an off-screen DOM element to a single A4-width PDF. The element is
-// authored at A4 portrait proportions (see PdfReport), so the common case is one
-// page; if a configuration makes the content taller than one A4 page, the image
-// is sliced across additional A4 pages so nothing is clipped.
-// Accepts the element directly (not an id) so it works inside a Shadow DOM —
-// document.getElementById can't reach the Shopify-embedded shadow root.
-export async function generatePdf(element: HTMLElement | null, filename: string) {
+// Rasterizes an off-screen DOM element to an A4 PDF and returns it as a Blob.
+//
+// We use html-to-image (SVG <foreignObject>) rather than html2canvas because
+// html2canvas does its own manual text layout and mangles letter-spacing and
+// word spaces on iOS Safari — the exported text came out as overlapping
+// gibberish. foreignObject rasterizes through the browser's own renderer, so
+// the output pixel-matches the on-screen preview on every device.
+//
+// Accepts the element directly (not an id) so it resolves inside a Shadow DOM.
+// Returns the PDF Blob so the caller can decide how to deliver it (download on
+// desktop, Web Share / Save-to-Files on mobile).
+export async function generatePdf(element: HTMLElement | null): Promise<Blob | null> {
   if (!element) {
     console.error('generatePdf: target element not found');
-    return;
+    return null;
   }
 
-  // Position off-screen (it normally lives inside a scaled preview wrapper).
+  // Pull the report out of its scaled preview wrapper so it rasterizes at
+  // natural size with no transform.
   const originalStyle = element.style.cssText;
   element.style.position = 'absolute';
   element.style.left = '-9999px';
-  element.style.top = '-9999px';
+  element.style.top = '0';
   element.style.transform = 'none';
   element.style.display = 'block';
 
   try {
-    const canvas = await html2canvas(element, {
-      scale: 2, // Higher resolution
-      useCORS: true,
+    // Ensure fonts are settled so glyph metrics match the preview.
+    if (document.fonts && document.fonts.ready) {
+      try { await document.fonts.ready; } catch { /* non-fatal */ }
+    }
+
+    const width = element.offsetWidth || 794;
+    const height = element.offsetHeight || 1123;
+
+    const canvas = await toCanvas(element, {
+      pixelRatio: 2,
       backgroundColor: '#ffffff',
-      logging: false,
+      width,
+      height,
+      cacheBust: true,
+      // The report renders in the system fallback font (Jost is not loaded), so
+      // there is nothing to embed — skipping avoids slow/failing font fetches
+      // and keeps the output identical to the preview.
+      skipFonts: true,
     });
 
     const imgData = canvas.toDataURL('image/jpeg', 0.92);
@@ -34,15 +53,12 @@ export async function generatePdf(element: HTMLElement | null, filename: string)
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageWidth = pdf.internal.pageSize.getWidth();   // 210
     const pageHeight = pdf.internal.pageSize.getHeight();  // 297
-
-    // Scale the captured image to the full page width; height follows aspect.
     const imgHeight = (canvas.height * pageWidth) / canvas.width;
 
     if (imgHeight <= pageHeight + 0.5) {
-      // Single page.
       pdf.addImage(imgData, 'JPEG', 0, 0, pageWidth, imgHeight);
     } else {
-      // Slice across multiple A4 pages by shifting the same image upward.
+      // Slice across multiple A4 pages so nothing is clipped.
       let remaining = imgHeight;
       let position = 0;
       while (remaining > 0.5) {
@@ -53,10 +69,53 @@ export async function generatePdf(element: HTMLElement | null, filename: string)
       }
     }
 
-    pdf.save(filename);
+    return pdf.output('blob');
   } catch (error) {
     console.error('Error generating PDF:', error);
+    return null;
   } finally {
     element.style.cssText = originalStyle;
   }
+}
+
+// Delivers the generated PDF: on devices that support sharing files (iOS/Android)
+// this opens the native share sheet so the user can "Save to Files"; otherwise it
+// triggers a normal browser download.
+export async function deliverPdf(blob: Blob, filename: string): Promise<void> {
+  const file =
+    typeof File !== 'undefined'
+      ? new File([blob], filename, { type: 'application/pdf' })
+      : null;
+
+  const nav = navigator as Navigator & {
+    canShare?: (data?: ShareData) => boolean;
+    share?: (data?: ShareData) => Promise<void>;
+  };
+
+  const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+  if (isMobile && file && nav.canShare && nav.canShare({ files: [file] }) && nav.share) {
+    try {
+      await nav.share({ files: [file], title: filename });
+      return;
+    } catch (e) {
+      // User cancelled, or share was blocked — fall through to download/open.
+      if ((e as DOMException)?.name === 'AbortError') return;
+    }
+  }
+
+  triggerDownload(blob, filename);
+}
+
+function triggerDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Give the browser a moment to start the download before revoking.
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
