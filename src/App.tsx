@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Sidebar } from './components/sidebar/Sidebar';
+import { PdfPreviewModal } from './components/pdf/PdfPreviewModal';
 import { CapViewer } from './components/viewer/CapViewer';
 import { useConfigStore, saveConfigForRestore, restoreConfigIfNeeded } from './store/configStore';
 
@@ -1052,9 +1053,69 @@ async function waitForPromiseWithin<T>(promise: Promise<T>, timeoutMs: number): 
   }
 }
 
+// Trim the surrounding white/transparent margin from a captured canvas so the
+// PDF hero render is tightly cropped to the model (used by the PDF export only).
+function cropWhitespace(canvas: HTMLCanvasElement): HTMLCanvasElement {
+  try {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return canvas;
+    const width = canvas.width;
+    const height = canvas.height;
+    const imgData = ctx.getImageData(0, 0, width, height);
+    const data = imgData.data;
+
+    let minX = width;
+    let maxX = 0;
+    let minY = height;
+    let maxY = 0;
+    let found = false;
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * 4;
+        const r = data[idx];
+        const g = data[idx + 1];
+        const b = data[idx + 2];
+        const a = data[idx + 3];
+
+        if (a > 10 && (r < 250 || g < 250 || b < 250)) {
+          found = true;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+
+    if (!found) return canvas;
+
+    const padding = 24;
+    const cropX = Math.max(0, minX - padding);
+    const cropY = Math.max(0, minY - padding);
+    const cropW = Math.min(width - cropX, (maxX - minX) + padding * 2);
+    const cropH = Math.min(height - cropY, (maxY - minY) + padding * 2);
+
+    const croppedCanvas = document.createElement('canvas');
+    croppedCanvas.width = cropW;
+    croppedCanvas.height = cropH;
+    const croppedCtx = croppedCanvas.getContext('2d');
+    if (!croppedCtx) return canvas;
+
+    croppedCtx.fillStyle = '#ffffff';
+    croppedCtx.fillRect(0, 0, cropW, cropH);
+    croppedCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+    return croppedCanvas;
+  } catch (e) {
+    console.warn('[CROP] Failed to crop whitespace:', e);
+    return canvas;
+  }
+}
+
 async function captureCanvasScreenshot(
   appLayoutRef: React.RefObject<HTMLDivElement | null>,
-  options?: { resetView?: boolean; hideLabels?: boolean }
+  options?: { resetView?: boolean; hideLabels?: boolean; cropToContent?: boolean }
 ): Promise<string | undefined> {
 
 
@@ -1088,7 +1149,8 @@ async function captureCanvasScreenshot(
         ctx2d.fillStyle = '#ffffff';
         ctx2d.fillRect(0, 0, tmp.width, tmp.height);
         ctx2d.drawImage(canvasEl, 0, 0);
-        result = tmp.toDataURL('image/jpeg', 0.85);
+        const out = options?.cropToContent ? cropWhitespace(tmp) : tmp;
+        result = out.toDataURL('image/jpeg', 0.85);
       } else {
         result = canvasEl.toDataURL('image/jpeg', 0.85);
       }
@@ -1600,6 +1662,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
   const [qrActive, setQrActive] = useState(false);
   const [arLoading, setArLoading] = useState(false);
   const [ralOpen, setRalOpen] = useState(false);
+  const [pdfOpen, setPdfOpen] = useState(false);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittingAction, setSubmittingAction] = useState<'cart' | 'buy' | null>(null);
@@ -1926,6 +1989,15 @@ export default function App({ productId, variantId }: AppProps = {}) {
 
         <Sidebar
           onOpenRal={() => setRalOpen(true)}
+          onExportPdf={
+            typeof window !== 'undefined' && (
+              window.location.hostname === 'localhost' ||
+              window.location.hostname === '127.0.0.1' ||
+              window.location.hostname.startsWith('192.168.') ||
+              window.location.hostname.startsWith('10.') ||
+              window.location.hostname.endsWith('.local')
+            ) ? () => setPdfOpen(true) : undefined
+          }
           isSubmitting={isSubmitting}
           submittingAction={submittingAction}
           submittingStep={submittingStep}
@@ -2556,6 +2628,12 @@ export default function App({ productId, variantId }: AppProps = {}) {
       </div>
 
       <RalModal open={ralOpen} onClose={() => setRalOpen(false)} />
+
+      <PdfPreviewModal
+        open={pdfOpen}
+        onClose={() => setPdfOpen(false)}
+        captureSnapshot={() => captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true, cropToContent: true })}
+      />
 
       {(() => {
         const portalTarget = (window as any).__chasePortalContainer as HTMLElement | undefined;

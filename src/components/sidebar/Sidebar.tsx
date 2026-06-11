@@ -9,12 +9,13 @@ interface SidebarProps {
   onOpenRal: () => void;
   onAddToCart: () => void;
   onBuyNow: () => void;
+  onExportPdf?: () => void;
   isSubmitting?: boolean;
   submittingAction?: 'cart' | 'buy' | null;
   submittingStep?: string;
 }
 
-export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, isSubmitting = false, submittingAction = null, submittingStep = '' }: SidebarProps) {
+export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, onExportPdf, isSubmitting = false, submittingAction = null, submittingStep = '' }: SidebarProps) {
   const config = useConfigStore();
 
   return (
@@ -106,6 +107,25 @@ export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, isSubmitting = false
       <div className="price-bar">
         <div className="price-header">
           <PriceDisplay />
+          {onExportPdf && (
+            <button
+              id="export-pdf-btn"
+              className="export-pdf-btn export-pdf-btn--inline"
+              onClick={onExportPdf}
+              disabled={isSubmitting}
+              aria-label="Export specification PDF"
+            >
+              {/* PDF file icon */}
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="9" y1="13" x2="15" y2="13"/>
+                <line x1="9" y1="17" x2="15" y2="17"/>
+                <polyline points="9 9 10 9"/>
+              </svg>
+              Export PDF
+            </button>
+          )}
         </div>
         <CartRow onAddToCart={onAddToCart} onBuyNow={onBuyNow} isSubmitting={isSubmitting} submittingAction={submittingAction} submittingStep={submittingStep} />
       </div>
