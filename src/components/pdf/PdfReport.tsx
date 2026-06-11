@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useConfigStore } from '../../store/configStore';
+import { KAMINOS_LOGO_WHITE } from './kaminosLogo';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PdfReport  —  "Airy" spec-sheet layout
@@ -105,9 +106,8 @@ export function PdfReport({ snapshotUrl }: PdfReportProps) {
         {/* Centered brand: logo + subtitle. Explicit width+height at the logo's
             true 600×214 aspect ratio so html2canvas can't squish it. */}
         <img
-          src="/kaminos-logo-white.png"
+          src={KAMINOS_LOGO_WHITE}
           alt="Kaminos"
-          crossOrigin="anonymous"
           width={171}
           height={61}
           style={{ width: '171px', height: '61px', display: 'block' }}

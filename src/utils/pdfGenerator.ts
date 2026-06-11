@@ -5,10 +5,11 @@ import { jsPDF } from 'jspdf';
 // authored at A4 portrait proportions (see PdfReport), so the common case is one
 // page; if a configuration makes the content taller than one A4 page, the image
 // is sliced across additional A4 pages so nothing is clipped.
-export async function generatePdf(elementId: string, filename: string) {
-  const element = document.getElementById(elementId);
+// Accepts the element directly (not an id) so it works inside a Shadow DOM —
+// document.getElementById can't reach the Shopify-embedded shadow root.
+export async function generatePdf(element: HTMLElement | null, filename: string) {
   if (!element) {
-    console.error(`Cannot find element with id ${elementId}`);
+    console.error('generatePdf: target element not found');
     return;
   }
 
