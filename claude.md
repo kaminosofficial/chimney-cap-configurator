@@ -150,7 +150,7 @@ Before the Shopify IIFE build, `scripts/sync-shopify-css.mjs` copies `globals.cs
 - CORS headers on `/api/*` and both IIFE filenames (Access-Control-Allow-Origin: *)
 - Cache-Control on IIFE: `public, max-age=60, s-maxage=300`
 - Function timeouts: `add-to-cart.ts` = 30s, `variant-image.ts` = 25s
-- Cron: `cleanup-variants` runs every 3 days at midnight UTC
+- Cron: `cleanup-variants` runs every 10 days at midnight UTC (`0 0 */10 * *`)
 
 ### Manual Deploy
 
@@ -229,7 +229,7 @@ The IIFE detects its own origin by scanning `<script>` tags for one containing `
   3. If found → reuses existing variant (instant, no propagation needed)
   4. If not found → creates new variant via `productVariantsBulkCreate` GraphQL
   5. Quick propagation hint (3s max) — client owns the real retry loop
-- **Variant cleanup**: Proactive cleanup when nearing 100-variant Shopify Basic limit (deletes CC-* variants older than 24h)
+- **Variant cleanup**: Proactive cleanup when nearing 100-variant Shopify Basic limit (deletes MFC-* variants older than 24h). Runs **concurrently** with variant creation (not awaited) unless the count is at 99+, where it blocks to free a slot first.
 - Returns `{ variantId, variantReused, propagated, price, properties, _timing }`
 - Line item `properties` include: Dimensions, Material & Gauge, Options, Powder Coat, Holes, per-hole details, Special Notes, hidden `_config_json`
 
@@ -248,7 +248,8 @@ The IIFE detects its own origin by scanning `<script>` tags for one containing `
 ### `GET /api/cleanup-variants`
 
 - Management dashboard for variant cleanup
-- Cron: runs every 3 days (deletes CC-* variants older than 3 days)
+- Cron: runs every 10 days (deletes MFC-* variants older than 10 days)
+- Manual dashboard: `https://chimney-cap-configurator.vercel.app/api/cleanup-variants?secret=<CRON_SECRET>` — lists all variants, shows auto-created (MFC-*) vs protected, allows selective or bulk delete of MFC-* only
 - Manual: accessible via browser with `?secret=CRON_SECRET` for management UI
 - Auth: `CRON_SECRET` env var, passed as query param or Bearer header
 
@@ -462,7 +463,7 @@ Each configuration produces a deterministic hash using FNV-1a:
 1. **Creation**: Via `productVariantsBulkCreate` GraphQL mutation
 2. **Propagation**: New variants take ~9-10s to appear on Shopify's storefront (eventual consistency)
 3. **Reuse**: Identical configs reuse existing variants — instant, no propagation needed
-4. **Cleanup**: Proactive cleanup at 95+ variants (target: 85), emergency cleanup on 422, cron every 3 days
+4. **Cleanup**: Proactive cleanup at 95+ variants (target: 85), emergency cleanup on 422, cron every 10 days
 5. **Limit**: Shopify Basic plan = 100 variants max. Do NOT raise above 100.
 
 ### Image Attachment
@@ -821,3 +822,9 @@ API handlers log warnings for requests from unknown origins via `warnUnknownOrig
 - **Screenshot hides labels**: Dimension labels (A/B/C arrows + side labels) are temporarily toggled off during canvas capture so the cart thumbnail/preview is clean. State is restored in a `finally` block.
 - **Responsive mount height**: `shopify-entry.tsx` overrides the mount element height on desktop (≥768px) to `max(640px, 80vh)` so the configurator fills most of the viewport on Kaminos product pages.
 - **PDF modal must stay INSIDE the shadow root**: portaling `PdfPreviewModal` to the light-DOM overlay container (tried + reverted June 2026, commits `602e3bc`/`ba21684`) **broke mobile PDF download on Shopify** — html2canvas then rasterized against the full theme page instead of the isolated configurator DOM and generation died silently on phones. If the theme's sticky header ever covers the dialog top, fix it with top padding inside the modal (see the chase repo's `PdfPreviewModal`: `justifyContent: 'flex-start'` + `padding: '14vh 16px 3vh'`), NOT by portaling.
+- **Cart progress overlay** (`src/components/CartProgressOverlay.tsx`): frosted overlay with a step checklist shown over the configurator while Add to Cart / Buy with Shop is in flight. Driven by the real `submittingStep` signals (`building`/`adding`/`syncing`/`redirecting`) — no fake timers. On mobile (≤767px) the overlay is `position: fixed` (viewport-anchored, since the stacked layout is taller than the screen) with `touch-action: none` to block scrolling; while it (or any in-shadow dialog) is up, App.tsx temporarily raises the **shadow host's whole ancestor chain** to max z-index so theme headers/sections can't paint over it, restoring inline styles exactly on hide.
+- **Server propagation hint is ~3.5s max** (`waitForStorefrontPropagation(…, 3500, 1200)`): the client's `addToCartWithRetry` owns the real retry loop. An earlier 18s server-side wait was the main cause of slow Add to Cart and was removed June 2026.
+- **Shared cap pricing module**: `src/utils/capPricing.ts` is the single implementation for client and server (verified by a 55,296-config parity test at extraction time). `api/add-to-cart.ts` 503s on degraded pricing instead of creating underpriced variants.
+- **Quantity clamp**: server clamps to 10 (matches client `MAX_QTY`).
+- **QRious is bundled** via the npm package; the CDN `<script>` injections (index.html + shopify-entry) were removed — the bundled copy is the only one.
+- **PDF stack lazy-loads in the SPA build**: `PdfPreviewModal` is `React.lazy` and jsPDF/html2canvas/html-to-image are dynamic imports inside `generatePdf()` (~790KB out of the SPA main chunk). The Shopify IIFE inlines them (`inlineDynamicImports`) — unchanged behavior there.
