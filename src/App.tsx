@@ -255,6 +255,60 @@ function forceOpenCartUi(): boolean {
   return false;
 }
 
+function forceCloseCartUi(): boolean {
+  let closed = false;
+
+  const detailsDrawer = document.querySelector('details[id*="CartDrawer"][open], details[data-cart-drawer][open]') as HTMLDetailsElement | null;
+  if (detailsDrawer) {
+    detailsDrawer.open = false;
+    closed = true;
+  }
+
+  for (const element of document.querySelectorAll('cart-drawer, cart-notification, [id*="CartDrawer"]')) {
+    if (!(element instanceof HTMLElement)) continue;
+    const isOpen = element.hasAttribute('open')
+      || element.classList.contains('active')
+      || element.classList.contains('is-open');
+    if (!isOpen) continue;
+
+    const drawer = element as HTMLElement & { close?: () => void };
+    if (typeof drawer.close === 'function') {
+      try { drawer.close(); } catch { /* theme close() may expect an event arg */ }
+    }
+    element.removeAttribute('open');
+    element.classList.remove('active', 'is-open', 'animate');
+    closed = true;
+  }
+
+  if (closed) {
+    window.setTimeout(() => releasePageScrollLockIfCartClosed('premature-open-guard'), 50);
+  }
+  return closed;
+}
+
+/**
+ * While an add/buy is in flight, the theme header (and its cart icon) stays
+ * clickable above our progress overlay — and the submission-time z-chain
+ * raise paints the configurator OVER any drawer that opens early, leaving a
+ * half-buried drawer with stale contents (observed live with a slow-
+ * propagating copper variant, June 2026). Worse, a drawer that is open
+ * during the pre-open section injection re-enters the "innerHTML replaced
+ * on an open drawer" failure mode. Until the flow reaches its own
+ * drawer-open step, close any cart UI that appears.
+ */
+function startPrematureCartOpenGuard() {
+  let closes = 0;
+  const id = window.setInterval(() => {
+    if (!isCartUiOpen()) return;
+    if (forceCloseCartUi()) {
+      closes++;
+      DEBUG() && console.log(`[CART] Closed prematurely opened cart UI (x${closes})`);
+      if (closes === 1) emitCartDebug('premature-cart-open-closed', {});
+    }
+  }, 350);
+  return { stop: () => window.clearInterval(id) };
+}
+
 function releasePageScrollLockIfCartClosed(reason: string) {
   if (isCartUiOpen()) return;
 
@@ -1072,6 +1126,90 @@ async function syncCartUiFromStorefront(tag: string) {
   return cartData;
 }
 
+/* ---- Buy Now cart snapshot & restore ----
+ * Buy Now must clear the cart so /checkout contains only the configured item
+ * (Shopify's cart checkout always checks out the WHOLE cart) — but native
+ * dynamic-checkout buttons never touch the cart, so customers expect their
+ * other items to survive. Snapshot the cart lines (variant id, quantity,
+ * properties — properties matter: another configured product in the cart
+ * keeps its _config_json) to sessionStorage before clearing, and re-add
+ * whatever is missing when the customer comes back. Per-tab, one-shot,
+ * time-boxed; every failure path degrades to today's behavior (cart stays
+ * cleared). Re-adding after a COMPLETED order is correct too — that matches
+ * what a native Buy Now would have left in the cart. */
+const CART_SNAPSHOT_KEY = 'chimney-cap-cart-snapshot';
+const CART_SNAPSHOT_MAX_AGE_MS = 60 * 60 * 1000;
+
+async function saveCartSnapshotBeforeClear(tag: string): Promise<void> {
+  try {
+    const cart = await fetchCartState(`${tag}-SNAPSHOT`);
+    const items = (Array.isArray(cart?.items) ? cart.items : [])
+      .map((item: any) => ({
+        id: Number(item.variant_id ?? item.id),
+        quantity: item.quantity || 1,
+        properties: item.properties && typeof item.properties === 'object' ? item.properties : undefined,
+      }))
+      .filter((item: any) => item.id > 0);
+
+    if (items.length === 0) return;
+    window.sessionStorage.setItem(CART_SNAPSHOT_KEY, JSON.stringify({ at: Date.now(), items }));
+    DEBUG() && console.log(`[${tag}] Cart snapshot saved (${items.length} line(s)) before Buy Now clear`);
+  } catch { /* storage/network unavailable — degrade to current behavior */ }
+}
+
+async function restoreCartSnapshotIfNeeded(): Promise<boolean> {
+  let raw: string | null = null;
+  try {
+    raw = window.sessionStorage.getItem(CART_SNAPSHOT_KEY);
+    if (raw) window.sessionStorage.removeItem(CART_SNAPSHOT_KEY); // one-shot
+  } catch { return false; }
+  if (!raw) return false;
+
+  try {
+    const snapshot = JSON.parse(raw);
+    const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
+    if (items.length === 0 || Date.now() - (snapshot?.at || 0) > CART_SNAPSHOT_MAX_AGE_MS) return false;
+
+    const cart = await fetchCartState('CART-RESTORE');
+    const inCart = new Set((cart?.items || []).map((item: any) => Number(item.variant_id ?? item.id)));
+    const missing = items.filter((item: any) => !inCart.has(Number(item.id)));
+    if (missing.length === 0) return false;
+
+    DEBUG() && console.log(`[CART-RESTORE] Re-adding ${missing.length} line(s) cleared by Buy Now`);
+    const res = await fetch(buildShopifyPath('cart/add.js'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: missing }),
+    });
+
+    let restoredCount = res.ok ? missing.length : 0;
+    if (!res.ok) {
+      // A batch add fails wholesale if one line is bad (e.g. sold out) —
+      // retry singly so the rest still come back.
+      for (const item of missing) {
+        const single = await fetch(buildShopifyPath('cart/add.js'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: [item] }),
+        }).catch(() => null);
+        if (single?.ok) restoredCount++;
+      }
+    }
+
+    if (restoredCount === 0) {
+      // Nothing made it back (e.g. throttle window) — keep the snapshot for
+      // the next back-navigation instead of losing the cart.
+      try { window.sessionStorage.setItem(CART_SNAPSHOT_KEY, raw); } catch { /* ignore */ }
+      return false;
+    }
+
+    emitCartDebug('cart-snapshot-restored', { lines: restoredCount, of: missing.length, batchOk: res.ok });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function waitForUsableRenderedSections(opts: {
   sectionIds: string[];
   tag: string;
@@ -1383,6 +1521,7 @@ async function addToCartWithRetry(opts: {
   sectionsHtml: Record<string, string> | null;
   error?: string;
   hardFail?: boolean;
+  rateLimited?: boolean;
   pendingPhase?: 'adding' | 'confirm' | 'price-wait';
   attempts: number;
   totalMs: number;
@@ -1392,6 +1531,7 @@ async function addToCartWithRetry(opts: {
   const MAX_ATTEMPTS = 20;
   const stepPrefix = tag === 'CART' ? 'cart' : 'buy';
   let attempts = 0;
+  let rateLimitHits = 0;
   let lastCartData: any = null;
   let lastSectionsHtml: Record<string, string> | null = null;
   let phase: 'adding' | 'confirm' | 'price-wait' = 'adding';
@@ -1439,7 +1579,25 @@ async function addToCartWithRetry(opts: {
 
           if (res.status === 429) {
             // Shopify per-IP rate limit (reproduced live at ~46 adds/40s).
-            // Retryable, not fatal — back off harder and stay in the budget.
+            // Brief throttles recover with backoff; a SUSTAINED window means
+            // every further attempt is wasted — exit early with an honest
+            // "store is busy" failure instead of grinding the full budget.
+            rateLimitHits++;
+            if (rateLimitHits >= 3) {
+              console.warn(`[${tag}] cart/add.js rate limited ${rateLimitHits}x — giving up early`);
+              return {
+                ok: false,
+                cartData: lastCartData,
+                priceVerified: false,
+                sectionsHtml: lastSectionsHtml,
+                error: 'Rate limited — the store is handling a lot of requests right now.',
+                hardFail: true,
+                rateLimited: true,
+                pendingPhase: phase,
+                attempts,
+                totalMs: Date.now() - start,
+              };
+            }
             console.warn(`[${tag}] cart/add.js rate limited (429) — backing off before retry`);
             onStep?.(`${stepPrefix}:syncing`);
             await new Promise(r => setTimeout(r, 3500 + Math.round(Math.random() * 1000)));
@@ -1585,6 +1743,7 @@ async function addToCartWithRetry(opts: {
     priceVerified: false,
     sectionsHtml: lastSectionsHtml,
     hardFail: false,
+    rateLimited: rateLimitHits > 0,
     pendingPhase: phase,
     attempts,
     totalMs: Date.now() - start,
@@ -1606,6 +1765,7 @@ async function continueCartPreparationUntilVerified(opts: {
   sectionsHtml: Record<string, string> | null;
   error?: string;
   hardFail?: boolean;
+  rateLimited?: boolean;
   pendingPhase?: 'adding' | 'confirm' | 'price-wait';
   attempts: number;
   totalMs: number;
@@ -1616,6 +1776,7 @@ async function continueCartPreparationUntilVerified(opts: {
   const MAX_ATTEMPTS = 20;
   const stepPrefix = tag === 'CART' ? 'cart' : 'buy';
   let attempts = 0;
+  let rateLimitHits = 0;
   let phase: 'adding' | 'confirm' | 'price-wait' = pendingPhase;
   let lastCartData: any = null;
   let lastSectionsHtml: Record<string, string> | null = null;
@@ -1658,6 +1819,24 @@ async function continueCartPreparationUntilVerified(opts: {
           }
 
           if (res.status === 429) {
+            // This is the second-chance loop — the foreground budget already
+            // tolerated throttling, so give up after 2 hits here.
+            rateLimitHits++;
+            if (rateLimitHits >= 2) {
+              console.warn(`[${tag}] Pending add rate limited ${rateLimitHits}x — giving up early`);
+              return {
+                ok: false,
+                cartData: lastCartData,
+                priceVerified: false,
+                sectionsHtml: lastSectionsHtml,
+                error: 'Rate limited — the store is handling a lot of requests right now.',
+                hardFail: true,
+                rateLimited: true,
+                pendingPhase: phase,
+                attempts,
+                totalMs: Date.now() - start,
+              };
+            }
             console.warn(`[${tag}] Pending add rate limited (429) — backing off before retry`);
             onStep?.(`${stepPrefix}:syncing`);
             await new Promise(r => setTimeout(r, 3500 + Math.round(Math.random() * 1000)));
@@ -1799,6 +1978,7 @@ async function continueCartPreparationUntilVerified(opts: {
     priceVerified: false,
     sectionsHtml: lastSectionsHtml,
     hardFail: false,
+    rateLimited: rateLimitHits > 0,
     pendingPhase: phase,
     attempts,
     totalMs: Date.now() - start,
@@ -1937,6 +2117,13 @@ export default function App({ productId, variantId }: AppProps = {}) {
     } else {
       // Restore config only when navigating back from cart (not on fresh refresh)
       restoreConfigIfNeeded();
+      // Back-from-checkout can be a full reload instead of bfcache — restore
+      // any Buy Now cart snapshot here too (one-shot key makes this safe to
+      // attempt from both this mount path and the pageshow handler).
+      void (async () => {
+        const restored = await restoreCartSnapshotIfNeeded();
+        if (restored) await syncCartUiFromStorefront('CART-RESTORE');
+      })();
     }
   }, []);
 
@@ -1961,7 +2148,10 @@ export default function App({ productId, variantId }: AppProps = {}) {
       resetSubmittingUi();
       restoreConfigIfNeeded();
       releasePageScrollLockIfCartClosed('pageshow');
-      void syncCartUiFromStorefront('PAGESHOW');
+      void (async () => {
+        const restored = await restoreCartSnapshotIfNeeded();
+        await syncCartUiFromStorefront(restored ? 'CART-RESTORE' : 'PAGESHOW');
+      })();
     };
 
     window.addEventListener('pageshow', handlePageShow);
@@ -2240,6 +2430,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
 
             submittingRef.current = true;
             let shouldResetSubmitting = true;
+            const prematureCartGuard = startPrematureCartOpenGuard();
             try {
               // Save BEFORE any async work — if the user navigates to /cart fast we still need
               // the config in sessionStorage when they come back. The duplicate call later in
@@ -2351,7 +2542,10 @@ export default function App({ productId, variantId }: AppProps = {}) {
               setSubmittingStep('cart:adding');
               const t1 = performance.now();
 
-              if (data.variantId && !data.variantReused) {
+              // Upload for new variants AND for reused ones that have no image
+              // (a variant born from a failed flow — e.g. a Buy Now that died
+              // before its upload step — would otherwise stay imageless forever).
+              if (data.variantId && (!data.variantReused || data.variantHasImage === false)) {
                 imageUploadPromise = (async () => {
                   const captureResult = await screenshotBase64Promise;
                   let screenshotBase64 = captureResult.image;
@@ -2435,7 +2629,9 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 });
               }
               if (!finalRetryResult.ok) {
-                throw new Error('We could not confirm the cart update yet. Please refresh the cart and try again.');
+                throw new Error(finalRetryResult.rateLimited
+                  ? 'Rate limited — the store is handling a lot of requests right now.'
+                  : 'We could not confirm the cart update yet. Please refresh the cart and try again.');
               }
 
               let finalCartData = finalRetryResult.cartData;
@@ -2507,7 +2703,15 @@ export default function App({ productId, variantId }: AppProps = {}) {
 
               if (sectionReadiness.usableSections) {
                 finalCartData = { ...finalCartData, sections: sectionReadiness.usableSections };
-                applySectionUpdates(sectionReadiness.usableSections);
+                // The guard keeps the drawer closed during this phase, but if
+                // one slipped open inside the guard's 350ms window, use the
+                // open-safe replace (raw innerHTML on an open drawer wipes the
+                // theme's drawer state — June 2026 incident class).
+                if (isCartUiOpen()) {
+                  applySectionUpdatesPreservingCartUi(sectionReadiness.usableSections, 'pre-open-already-open');
+                } else {
+                  applySectionUpdates(sectionReadiness.usableSections);
+                }
               }
 
               if (sectionReadiness.rejectedSections) {
@@ -2568,7 +2772,10 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 });
               }
 
-              // Open the cart drawer/notification â€” price is correct by now
+              // Open the cart drawer/notification â€” price is correct by now.
+              // Stop the premature-open guard first: from here on, an open
+              // drawer is OUR open.
+              prematureCartGuard.stop();
               const drawerOpened = tryOpenCartUi();
 
               if (drawerOpened) {
@@ -2669,6 +2876,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
               const msg = formatCheckoutErrorMessage(err?.message || 'Unknown error', 'cart');
               alert(msg.length > 200 ? msg.slice(0, 200) + '...' : msg);
             } finally {
+              prematureCartGuard.stop();
               submittingRef.current = false;
               if (shouldResetSubmitting) {
                 setIsSubmitting(false);
@@ -2687,6 +2895,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
 
             submittingRef.current = true;
             let shouldResetSubmitting = true;
+            const prematureCartGuard = startPrematureCartOpenGuard();
             try {
               // Save BEFORE any async work — Buy Now redirects to /checkout once cart is set;
               // if the user comes back, the configurator should still be on the same config.
@@ -2745,6 +2954,9 @@ export default function App({ productId, variantId }: AppProps = {}) {
 
               // Step 2: Clear cart, add item, then verify price before checkout
               setSubmittingStep('buy:adding');
+              // Snapshot the customer's existing cart lines before the clear —
+              // restored by restoreCartSnapshotIfNeeded() when they come back.
+              await saveCartSnapshotBeforeClear('BUY');
               await fetch(buildShopifyPath('cart/clear.js'), { method: 'POST' });
               // Brief pause after cart clear to avoid Shopify 429 rate limiting
               await new Promise(r => setTimeout(r, 300));
@@ -2790,13 +3002,15 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 });
               }
               if (!finalBuyResult.ok) {
-                throw new Error('We could not confirm the cart update yet. Please refresh the cart and try again.');
+                throw new Error(finalBuyResult.rateLimited
+                  ? 'Rate limited — the store is handling a lot of requests right now.'
+                  : 'We could not confirm the cart update yet. Please refresh the cart and try again.');
               }
 
               // Upload image in background â€” wait for the upload to complete
               // before navigating, so the request isn't cancelled mid-flight.
               const screenshotBase64 = await screenshotBase64Promise;
-              if (screenshotBase64 && data.variantId && !data.variantReused) {
+              if (screenshotBase64 && data.variantId && (!data.variantReused || data.variantHasImage === false)) {
                 const tImg = performance.now();
                 DEBUG() && console.log('[IMG] Buy Now â€” uploading before checkout redirect...');
                 // 2 attempts max: the image matters at checkout, but we won't
@@ -2817,6 +3031,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
               setSubmittingStep('buy:redirecting');
               saveConfigForRestore();
               shouldResetSubmitting = false;
+              prematureCartGuard.stop();
               window.location.href = buildShopifyPath('checkout');
               // Safety: if navigation doesn't complete in 15s (slow mobile), unlock the UI
               setTimeout(() => {
@@ -2832,6 +3047,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
               const msg = formatCheckoutErrorMessage(err?.message || 'Unknown error', 'buy');
               alert(msg.length > 220 ? msg.slice(0, 220) + '...' : msg);
             } finally {
+              prematureCartGuard.stop();
               submittingRef.current = false;
               if (shouldResetSubmitting) {
                 setIsSubmitting(false);

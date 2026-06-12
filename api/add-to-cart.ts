@@ -421,6 +421,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         const existingId = findInVariants(allVariants, hash, priceStr);
+        // Reused variants created by a failed flow (e.g. Buy Now that died in
+        // the cart-confirm phase) may have no screenshot attached — tell the
+        // client so it can upload one (image_id comes from the REST variant).
+        const existingVariant = existingId ? allVariants.find((v: any) => String(v.id) === existingId) : null;
         let variantId: string | undefined;
         let lastError = '';
 
@@ -465,6 +469,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             success: true,
             variantId,
             variantReused: !!existingId,
+            variantHasImage: existingId ? !!existingVariant?.image_id : false,
             propagated,
             quantity,
             price: priceStr,
