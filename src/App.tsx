@@ -797,6 +797,10 @@ function formatCheckoutErrorMessage(rawMessage: string, action: 'cart' | 'buy'):
     return `We hit a network issue while trying to ${actionLabel}. Please refresh the page and try again. If the problem continues, please check your connection and try once more.`;
   }
 
+  if (lower.includes('too many') || lower.includes('rate limit') || lower.includes('429') || lower.includes('throttle')) {
+    return `The store is handling a lot of requests right now, so we couldn't ${actionLabel}. Please wait a few seconds and try again.`;
+  }
+
   if (lower.includes('shopify is still finalizing your price')) {
     return `Your configuration is still syncing with Shopify. Please wait a moment, then refresh the page and try again.`;
   }
@@ -1296,6 +1300,60 @@ async function captureCanvasScreenshot(
 }
 
 /**
+ * Upload the 3D screenshot to /api/variant-image with retries. A variant
+ * without its image falls back to the default product photo in cart and
+ * checkout (confusing for custom configs), so transient failures — Shopify
+ * Admin throttling under rapid adds, flaky mobile networks — are retried.
+ * 413 (image too large) is NOT retried: the identical payload cannot succeed.
+ * Final failure emits telemetry so it's visible in Vercel logs.
+ */
+async function uploadVariantImageWithRetry(opts: {
+  apiBase: string;
+  variantId: string | number;
+  productId: string | null | undefined;
+  image: string;
+  tag: string;
+  maxAttempts?: number;
+}): Promise<string | null> {
+  const { apiBase, variantId, productId, image, tag, maxAttempts = 3 } = opts;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const startedAt = performance.now();
+    try {
+      const res = await fetch(`${apiBase}/api/variant-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ variantId, productId, image }),
+      });
+      const ms = Math.round(performance.now() - startedAt);
+
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        const url = data?.imageUrl ?? null;
+        DEBUG() && console.log(`[IMG] [${tag}] Upload ok on attempt ${attempt}/${maxAttempts} (${ms}ms)`);
+        return url;
+      }
+
+      if (res.status === 413) {
+        console.warn(`[IMG] [${tag}] Upload rejected as too large (413) — not retrying`);
+        return null;
+      }
+
+      console.warn(`[IMG] [${tag}] Upload attempt ${attempt}/${maxAttempts} failed: HTTP ${res.status} (${ms}ms)`);
+    } catch (e: any) {
+      console.warn(`[IMG] [${tag}] Upload attempt ${attempt}/${maxAttempts} error: ${e?.message}`);
+    }
+
+    if (attempt < maxAttempts) {
+      await new Promise(r => setTimeout(r, attempt === 1 ? 1500 : 4000));
+    }
+  }
+
+  emitCartDebug('image-upload-failed', { variantId, attempts: maxAttempts, tag });
+  return null;
+}
+
+/**
  * Unified add-to-cart with retry: handles both "sold out" (variant not yet
  * visible) AND "$0 price" (variant visible but price not propagated) in a
  * single time-budgeted loop. Propagation is NEVER surfaced as an error.
@@ -1368,11 +1426,23 @@ async function addToCartWithRetry(opts: {
 
         if (!res.ok) {
           const errorText = await res.text().catch(() => '');
-          const compactError = errorText.replace(/\s+/g, ' ').trim();
+          // Rate-limit/bot-protection responses are full HTML challenge pages —
+          // never let that markup become a user-facing error message.
+          const looksLikeHtml = /^\s*</.test(errorText);
+          const compactError = looksLikeHtml ? '' : errorText.replace(/\s+/g, ' ').trim();
 
           if (res.status === 422) {
             console.warn(`[${tag}] cart/add.js still propagating: HTTP 422 ${compactError.slice(0, 160)}`);
             onStep?.(`${stepPrefix}:syncing`);
+            continue;
+          }
+
+          if (res.status === 429) {
+            // Shopify per-IP rate limit (reproduced live at ~46 adds/40s).
+            // Retryable, not fatal — back off harder and stay in the budget.
+            console.warn(`[${tag}] cart/add.js rate limited (429) — backing off before retry`);
+            onStep?.(`${stepPrefix}:syncing`);
+            await new Promise(r => setTimeout(r, 3500 + Math.round(Math.random() * 1000)));
             continue;
           }
 
@@ -1576,11 +1646,21 @@ async function continueCartPreparationUntilVerified(opts: {
 
         if (!res.ok) {
           const errorText = await res.text().catch(() => '');
-          const compactError = errorText.replace(/\s+/g, ' ').trim();
+          // Rate-limit/bot-protection responses are full HTML challenge pages —
+          // never let that markup become a user-facing error message.
+          const looksLikeHtml = /^\s*</.test(errorText);
+          const compactError = looksLikeHtml ? '' : errorText.replace(/\s+/g, ' ').trim();
 
           if (res.status === 422) {
             console.warn(`[${tag}] Pending add still propagating: HTTP 422 ${compactError.slice(0, 160)}`);
             onStep?.(`${stepPrefix}:syncing`);
+            continue;
+          }
+
+          if (res.status === 429) {
+            console.warn(`[${tag}] Pending add rate limited (429) — backing off before retry`);
+            onStep?.(`${stepPrefix}:syncing`);
+            await new Promise(r => setTimeout(r, 3500 + Math.round(Math.random() * 1000)));
             continue;
           }
 
@@ -2274,11 +2354,19 @@ export default function App({ productId, variantId }: AppProps = {}) {
               if (data.variantId && !data.variantReused) {
                 imageUploadPromise = (async () => {
                   const captureResult = await screenshotBase64Promise;
-                  const screenshotBase64 = captureResult.image;
+                  let screenshotBase64 = captureResult.image;
                   const captureMs = captureResult.captureMs;
 
                   if (!screenshotBase64) {
-                    DEBUG() && console.warn('[IMG] Screenshot unavailable before cart open; skipping upload');
+                    // Capture can fail on phones (WebGL context dropped under
+                    // memory pressure). One fresh attempt — the canvas has
+                    // usually recovered by now.
+                    DEBUG() && console.warn('[IMG] First capture failed — retrying once');
+                    screenshotBase64 = await captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true });
+                  }
+
+                  if (!screenshotBase64) {
+                    console.warn('[IMG] Screenshot unavailable after retry; skipping upload');
                     emitCartDebug('image-capture-complete', {
                       variantId: debugVariantId,
                       captureMs,
@@ -2295,36 +2383,23 @@ export default function App({ productId, variantId }: AppProps = {}) {
                     dom: collectCartDomSnapshot(),
                   });
 
-                  const uploadStartedAt = performance.now();
-                  try {
-                    const imgRes = await fetch(`${apiBase}/api/variant-image`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        variantId: data.variantId,
-                        productId: resolvedShopifyIds.productId,
-                        image: screenshotBase64,
-                      }),
-                    });
-                    const uploadMs = Math.round(performance.now() - uploadStartedAt);
-                    if (!imgRes.ok) {
-                      console.warn(`[IMG] Upload failed before cart open: HTTP ${imgRes.status} (${uploadMs}ms)`);
-                      return null;
-                    }
-                    const imgData = await imgRes.json().catch(() => null);
-                    expectedImageUrl = imgData?.imageUrl ?? null;
+                  const uploadedUrl = await uploadVariantImageWithRetry({
+                    apiBase,
+                    variantId: data.variantId,
+                    productId: resolvedShopifyIds.productId,
+                    image: screenshotBase64,
+                    tag: 'CART',
+                  });
+                  if (uploadedUrl) {
+                    expectedImageUrl = uploadedUrl;
                     emitCartDebug('image-upload-complete', {
                       variantId: debugVariantId,
                       imageUrl: expectedImageUrl,
                       captureMs,
-                      uploadMs,
                       dom: collectCartDomSnapshot(),
                     });
-                    return expectedImageUrl;
-                  } catch (e: any) {
-                    console.warn('[IMG] Upload error before cart open:', e?.message);
-                    return null;
                   }
+                  return uploadedUrl;
                 })();
               }
 
@@ -2412,12 +2487,17 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 imageUrl: expectedImageUrl,
               };
               const verifiedSections = await fetchRenderedSections(drawerSectionIds, 'CART');
+              // 8s budget: prefer opening the drawer WITH the item already in it
+              // over opening fast-but-stale and having the catch-up loop pop it
+              // in afterwards (client found that jarring). Rendered sections
+              // typically lag /cart.js by 0.5–6s; the post-open catch-up loop
+              // remains the safety net for the rare longer tail.
               const sectionReadiness = await waitForUsableRenderedSections({
                 sectionIds: drawerSectionIds,
                 tag: 'CART-SECTIONS',
                 expected: renderExpectation,
                 requirements: { requireVariant: true },
-                maxWaitMs: drawerSectionIds.length > 0 ? 3500 : 0,
+                maxWaitMs: drawerSectionIds.length > 0 ? 8000 : 0,
                 seedSections: [
                   { source: 'verified-initial', sections: verifiedSections },
                   { source: 'bundled-initial', sections: finalRetryResult.sectionsHtml },
@@ -2719,21 +2799,17 @@ export default function App({ productId, variantId }: AppProps = {}) {
               if (screenshotBase64 && data.variantId && !data.variantReused) {
                 const tImg = performance.now();
                 DEBUG() && console.log('[IMG] Buy Now â€” uploading before checkout redirect...');
-                try {
-                  const imgRes = await fetch(`${apiBase}/api/variant-image`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      variantId: data.variantId,
-                      productId: resolvedShopifyIds.productId,
-                      image: screenshotBase64,
-                    }),
-                  });
-                  const imgMs = Math.round(performance.now() - tImg);
-                  DEBUG() && console.log(`[IMG] Buy Now upload: ${imgRes.ok ? 'ok' : imgRes.status} in ${imgMs}ms`);
-                } catch (e: any) {
-                  console.warn('[IMG] Buy Now upload failed:', e?.message);
-                }
+                // 2 attempts max: the image matters at checkout, but we won't
+                // hold the redirect through a third long retry.
+                const buyImageUrl = await uploadVariantImageWithRetry({
+                  apiBase,
+                  variantId: data.variantId,
+                  productId: resolvedShopifyIds.productId,
+                  image: screenshotBase64,
+                  tag: 'BUY',
+                  maxAttempts: 2,
+                });
+                DEBUG() && console.log(`[IMG] Buy Now upload: ${buyImageUrl ? 'ok' : 'failed'} in ${Math.round(performance.now() - tImg)}ms`);
               }
 
               // Step 4: Go straight to checkout
