@@ -2633,23 +2633,15 @@ export default function App({ productId, variantId }: AppProps = {}) {
 
       <RalModal open={ralOpen} onClose={() => setRalOpen(false)} />
 
-      {pdfOpen && (() => {
-        // Portal to the light DOM on Shopify (same as the AR/QR overlays): inside
-        // the shadow root the modal's z-index can't escape theme stacking contexts,
-        // so the sticky site header paints over the top of the dialog. The modal is
-        // fully inline-styled, so it renders identically outside the shadow root.
-        const pdfModal = (
-          <Suspense fallback={null}>
-            <PdfPreviewModal
-              open={pdfOpen}
-              onClose={() => setPdfOpen(false)}
-              captureSnapshot={() => captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true, cropToContent: true })}
-            />
-          </Suspense>
-        );
-        const pdfPortalTarget = (window as any).__chasePortalContainer as HTMLElement | undefined;
-        return pdfPortalTarget ? createPortal(pdfModal, pdfPortalTarget) : pdfModal;
-      })()}
+      {pdfOpen && (
+        <Suspense fallback={null}>
+          <PdfPreviewModal
+            open={pdfOpen}
+            onClose={() => setPdfOpen(false)}
+            captureSnapshot={() => captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true, cropToContent: true })}
+          />
+        </Suspense>
+      )}
 
       {(() => {
         const portalTarget = (window as any).__chasePortalContainer as HTMLElement | undefined;

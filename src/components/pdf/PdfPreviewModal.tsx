@@ -121,22 +121,6 @@ export function PdfPreviewModal({ open, onClose, captureSnapshot }: PdfPreviewMo
       }}
       onClick={(e) => { if (e.target === e.currentTarget) handleClose(); }}
     >
-      {/* Self-contained spinner styles — the modal is portaled to the LIGHT DOM on
-          Shopify (to escape theme stacking contexts), where the shadow-scoped
-          globals CSS can't reach it. */}
-      <style>{`
-        @keyframes pdf-spin {
-          to { transform: rotate(360deg); }
-        }
-        .pdf-capture-spinner {
-          width: 36px;
-          height: 36px;
-          border: 3px solid rgba(209, 179, 130, 0.2);
-          border-top-color: rgb(209, 179, 130);
-          border-radius: 50%;
-          animation: pdf-spin 0.75s linear infinite;
-        }
-      `}</style>
       <div style={{
         background: '#fff',
         borderRadius: '12px',
