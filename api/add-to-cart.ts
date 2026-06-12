@@ -269,7 +269,6 @@ async function shopifyGraphQL(query: string, accessToken: string, variables?: Re
 }
 
 const cachedOptionNames = new Map<string, string>();
-const cachedProductHandles = new Map<string, string>();
 
 async function getProductOptionName(productId: string, accessToken: string): Promise<string> {
     const cached = cachedOptionNames.get(productId);
@@ -289,27 +288,6 @@ async function getProductOptionName(productId: string, accessToken: string): Pro
         console.warn('[CART] getProductOptionName failed:', e.message);
     }
     return 'Title';
-}
-
-async function getProductHandle(productId: string, accessToken: string): Promise<string | null> {
-    const cached = cachedProductHandles.get(productId);
-    if (cached) return cached;
-    try {
-        const res = await fetch(
-            `https://${SHOPIFY_STORE}/admin/api/2025-10/products/${productId}.json?fields=handle`,
-            { headers: { 'X-Shopify-Access-Token': accessToken } }
-        );
-        if (!res.ok) return null;
-        const data = await res.json();
-        const handle = data?.product?.handle;
-        if (handle) {
-            cachedProductHandles.set(productId, handle);
-            return handle;
-        }
-    } catch (e: any) {
-        console.warn('[CART] getProductHandle failed:', e.message);
-    }
-    return null;
 }
 
 interface VariantCreateResult { ok: boolean; variantId?: string; error?: string; status?: number }
@@ -370,78 +348,6 @@ async function createVariant(
     return { ok: true, variantId: numericId };
 }
 
-/* ---- Storefront propagation check ---- */
-
-async function waitForStorefrontPropagation(
-    variantId: string,
-    expectedPrice: string,
-    storefrontDomain: string,
-    productHandle: string | null,
-    maxWaitMs = 3500,
-    intervalMs = 1200
-): Promise<boolean> {
-    const start = Date.now();
-    const numericId = Number(variantId);
-    let attempt = 0;
-    while (Date.now() - start < maxWaitMs) {
-        attempt++;
-        await new Promise(r => setTimeout(r, attempt === 1 ? 1000 : intervalMs));
-        try {
-            const res = await fetch(`https://${storefrontDomain}/cart/add.js`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                body: JSON.stringify({
-                    items: [{ id: numericId, quantity: 1, properties: { _propagation_check: 'true' } }],
-                }),
-            });
-
-            if (res.ok) {
-                const data = await res.json().catch(() => null);
-                const item = Array.isArray(data?.items) ? data.items.find((i: any) => Number(i.id) === numericId) : data;
-                const priceCents = Number(item?.price ?? item?.final_price ?? 0);
-                if (priceCents > 0 || !expectedPrice) {
-                    console.log(`[PROP] Variant ${variantId} cart-addable after ${Date.now() - start}ms`);
-                    return true;
-                }
-            }
-
-            if (res.status === 429) {
-                await new Promise(r => setTimeout(r, 3000));
-                continue;
-            }
-
-            if (productHandle) {
-                const productRes = await fetch(`https://${storefrontDomain}/products/${productHandle}.json?v=${Date.now()}`, {
-                    headers: { 'Accept': 'application/json' },
-                });
-                if (productRes.ok) {
-                    const productData = await productRes.json();
-                    const found = (productData?.product?.variants || []).find((v: any) => v.id === numericId);
-                    if (found && found.price === expectedPrice && found.available === true) {
-                        console.log(`[PROP] Variant ${variantId} available in product JSON after ${Date.now() - start}ms`);
-                        return true;
-                    }
-                }
-            }
-        } catch {
-            if (productHandle) {
-                const productRes = await fetch(`https://${storefrontDomain}/products/${productHandle}.json?v=${Date.now()}`, {
-                    headers: { 'Accept': 'application/json' },
-                }).catch(() => null);
-                if (productRes?.ok) {
-                    const productData = await productRes.json();
-                    const found = (productData?.product?.variants || []).find((v: any) => v.id === numericId);
-                    if (found && found.price === expectedPrice && found.available === true) {
-                        console.log(`[PROP] Variant ${variantId} available in product JSON after ${Date.now() - start}ms`);
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    return false;
-}
-
 /* ------------------------------------------------------------------ */
 /*  Handler                                                            */
 /* ------------------------------------------------------------------ */
@@ -462,12 +368,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         warnUnknownOrigin(req.headers.origin as string | undefined, 'CART');
 
-        // Storefront domain for propagation polling (kaminos.com is faster than .myshopify.com).
-        const origin = req.headers.origin || req.headers.referer || '';
-        let storefrontDomain = '';
-        try { storefrontDomain = new URL(origin as string).hostname; } catch { /* ignore */ }
-        if (!storefrontDomain) storefrontDomain = SHOPIFY_STORE;
-
         if (!config.shopifyProductId && SHOPIFY_PRODUCT_ID) {
             config.shopifyProductId = SHOPIFY_PRODUCT_ID;
         }
@@ -486,11 +386,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             fetchPricingFromPublicSheet(GOOGLE_SHEET_ID, 'pricing'),
         ]);
 
-        // 2. Option name + product handle in parallel.
-        const [optionName, productHandle] = await Promise.all([
-            getProductOptionName(config.shopifyProductId, accessToken),
-            getProductHandle(config.shopifyProductId, accessToken),
-        ]);
+        // 2. Option name (handle fetch removed — it only fed the propagation probe).
+        const optionName = await getProductOptionName(config.shopifyProductId, accessToken);
 
         // 3. Server-side price (tamper-proof — recomputed from sheet pricing, never trusts client).
         const breakdown = computeCapPriceBreakdown(config, pricing);
@@ -551,13 +448,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             });
         }
 
-        // 5. Quick propagation hint only (~3.5s max). The client owns the real
-        //    retry loop (addToCartWithRetry handles 422/$0 with backoff), so
-        //    blocking here just delays the response without adding reliability.
-        let propagated = true;
-        if (!existingId) {
-            propagated = await waitForStorefrontPropagation(variantId, priceStr, storefrontDomain, productHandle, 3500, 1200);
-        }
+        // 5. No server-side propagation wait (removed June 2026, mirroring chase).
+        //    It blocked 1–3.5s per new variant and duplicated the client's own
+        //    readiness loop (addToCartWithRetry handles 422/$0 with backoff).
+        //    `propagated` is true only for reused variants.
+        const propagated = !!existingId;
 
         // 6. Line item properties + response.
         const properties = buildCartProperties(config);

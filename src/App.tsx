@@ -538,6 +538,100 @@ function applySectionUpdatesPreservingCartUi(sections: Record<string, string>, r
   });
 }
 
+function cartUiContainsVariant(variantId: number): boolean {
+  if (!variantId) return false;
+  const token = String(variantId);
+  const selectors = [
+    'cart-drawer',
+    'cart-notification',
+    'details[id*="CartDrawer"]',
+    '[id="CartDrawer"]',
+    '[id*="CartDrawer"]',
+  ];
+
+  const seen = new Set<Element>();
+  for (const selector of selectors) {
+    for (const element of document.querySelectorAll(selector)) {
+      if (seen.has(element)) continue;
+      seen.add(element);
+      if (element instanceof HTMLElement && element.innerHTML.includes(token)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+let drawerCatchUpToken = 0;
+
+/**
+ * Post-open drawer self-correction. Shopify's rendered cart sections can lag
+ * /cart.js by several seconds for freshly created variants, so the drawer can
+ * open before its HTML includes the new line item (badge says 1, drawer looks
+ * stale). The theme ignores our custom cart events, so without this the stale
+ * drawer never fixes itself. This polls in the background and injects the
+ * fresh drawer HTML once Shopify renders it, via the same
+ * applySectionUpdatesPreservingCartUi helper that the post-image refresh and
+ * pageshow resync already use in production. Touches ONLY the cart drawer
+ * section wrapper — nothing else on the page.
+ */
+function startPostOpenDrawerCatchUp(opts: {
+  variantId: number;
+  sectionIds: string[];
+  expectedPriceText?: string;
+  cartDataForEvents?: any;
+}) {
+  const { variantId, sectionIds, expectedPriceText, cartDataForEvents } = opts;
+  if (!variantId || sectionIds.length === 0) return;
+
+  const token = ++drawerCatchUpToken;
+  const startedAt = Date.now();
+  const MAX_MS = 45000;
+  const INTERVAL_MS = 2000;
+  let attempts = 0;
+
+  const tick = async () => {
+    if (token !== drawerCatchUpToken) return; // superseded by a newer add
+    if (cartUiContainsVariant(variantId)) {
+      DEBUG() && console.log(`[CART] Drawer shows variant ${variantId} — catch-up done after ${attempts} poll(s)`);
+      return;
+    }
+    if (Date.now() - startedAt > MAX_MS) {
+      emitCartDebug('post-open-catchup-exhausted', { variantId, attempts });
+      return;
+    }
+
+    attempts++;
+    try {
+      const fetched = await fetchRenderedSections(sectionIds, 'CART-CATCHUP');
+      const selection = selectUsableRenderedSections(
+        fetched,
+        { variantId, priceText: expectedPriceText },
+        { requireVariant: true },
+      );
+      const primaryReady = !!selection.usableSections
+        && Object.keys(selection.usableSections).some(isPrimaryCartSectionId);
+
+      if (token !== drawerCatchUpToken) return;
+      if (primaryReady && !cartUiContainsVariant(variantId)) {
+        applySectionUpdatesPreservingCartUi(selection.usableSections!, 'post-open-catchup');
+        dispatchCartSyncEvents(cartDataForEvents ?? null);
+        emitCartDebug('post-open-catchup-applied', {
+          variantId,
+          attempts,
+          ms: Date.now() - startedAt,
+        });
+        return;
+      }
+    } catch { /* transient — keep polling */ }
+
+    window.setTimeout(tick, INTERVAL_MS);
+  };
+
+  window.setTimeout(tick, INTERVAL_MS);
+}
+
 function removeConfigurationOptionRows(root: ParentNode) {
   const removePropertyRow = (element: Element) => {
     const wrapper = element.closest('.product-option') || element.parentElement;
@@ -875,11 +969,19 @@ function selectPendingCartSections(
   variantId: number,
   expectedPriceText?: string,
 ) {
-  return selectUsableRenderedSections(
+  const usable = selectUsableRenderedSections(
     sections,
     { variantId, priceText: expectedPriceText },
     { requireVariant: true },
   ).usableSections;
+  if (!usable) return null;
+
+  // Only treat the result as "display-ready" when the primary cart section
+  // (the drawer itself) is present and valid. Non-primary sections like
+  // cart-icon-bubble pass validation unchecked, and a bubble-only result here
+  // short-circuited the retry loop before the price was verified — opening a
+  // drawer whose contents didn't include the new item.
+  return Object.keys(usable).some(isPrimaryCartSectionId) ? usable : null;
 }
 
 async function fetchCartState(tag: string): Promise<any | null> {
@@ -989,12 +1091,20 @@ async function waitForUsableRenderedSections(opts: {
     seedSections = [],
   } = opts;
 
+  // "Ready" must include the primary cart section (the drawer itself).
+  // Non-primary sections (e.g. cart-icon-bubble) pass validation unchecked,
+  // so without this a bubble-only result would count as success and the
+  // drawer would open with stale contents — badge updated, item invisible.
+  const wantsPrimarySection = sectionIds.some(isPrimaryCartSectionId);
+  const selectionReady = (usable: Record<string, string> | null): boolean =>
+    !!usable && (!wantsPrimarySection || Object.keys(usable).some(isPrimaryCartSectionId));
+
   let lastRejectedSections: Record<string, any> | null = null;
 
   for (const seed of seedSections) {
     if (!seed.sections) continue;
     const selection = selectUsableRenderedSections(seed.sections, expected, requirements);
-    if (selection.usableSections) {
+    if (selectionReady(selection.usableSections)) {
       return {
         usableSections: selection.usableSections,
         rejectedSections: selection.rejectedSections,
@@ -1025,7 +1135,7 @@ async function waitForUsableRenderedSections(opts: {
 
     const fetchedSections = await fetchRenderedSections(sectionIds, tag);
     const selection = selectUsableRenderedSections(fetchedSections, expected, requirements);
-    if (selection.usableSections) {
+    if (selectionReady(selection.usableSections)) {
       return {
         usableSections: selection.usableSections,
         rejectedSections: selection.rejectedSections,
@@ -2367,34 +2477,15 @@ export default function App({ productId, variantId }: AppProps = {}) {
               saveConfigForRestore();
 
               if (drawerSectionIds.length > 0 && !sectionReadiness.usableSections) {
-                // Sections still show $0 â€” DON'T redirect to /cart (it would also show $0).
-                // Instead, keep the spinner and poll a bit longer for correct sections.
-                console.warn('[CART] Sections not ready after initial wait â€” extended retry...');
-                const extendedSections = await waitForUsableRenderedSections({
-                  sectionIds: drawerSectionIds,
-                  tag: 'CART-EXTENDED',
-                  expected: renderExpectation,
-                  requirements: { requireVariant: true },
-                  maxWaitMs: 6000,
-                  delayMs: 2000,
-                  seedSections: [],
+                // Drawer HTML still stale ($0 / item missing). Don't keep the user
+                // waiting on a spinner — open now and let the post-open catch-up
+                // loop inject the fresh drawer HTML the moment Shopify renders it.
+                console.warn('[CART] Sections not ready pre-open — relying on post-open catch-up');
+                emitCartDebug('pre-open-sections-not-ready', {
+                  variantId: debugVariantId,
+                  targetItem: summarizeCartItemForDebug(findTargetCartItem(finalCartData, debugVariantId)),
+                  dom: collectCartDomSnapshot(),
                 });
-
-                if (extendedSections.usableSections) {
-                  DEBUG() && console.log('[CART] Extended retry got usable sections');
-                  applySectionUpdates(extendedSections.usableSections);
-                  finalCartData = { ...finalCartData, sections: extendedSections.usableSections };
-                } else {
-                  // Last resort: open drawer anyway â€” the theme will render whatever it has,
-                  // and we dispatch sync events so it can self-correct
-                  console.warn('[CART] Extended retry exhausted â€” opening drawer with best-effort sections');
-                  emitCartDebug('drawer-open-skipped', {
-                    variantId: debugVariantId,
-                    reason: 'rendered-sections-not-ready-extended',
-                    targetItem: summarizeCartItemForDebug(findTargetCartItem(finalCartData, debugVariantId)),
-                    dom: collectCartDomSnapshot(),
-                  });
-                }
               }
 
               // Open the cart drawer/notification â€” price is correct by now
@@ -2403,6 +2494,16 @@ export default function App({ productId, variantId }: AppProps = {}) {
               if (drawerOpened) {
                 DEBUG() && console.log('[CART] Cart drawer opened');
                 dispatchCartSyncEvents(finalCartData);
+                // Background self-correction: if the drawer DOM doesn't show the
+                // new item yet (rendered sections lagged behind cart.js), poll
+                // quietly and fill it in once Shopify renders it. No-op when the
+                // drawer is already correct.
+                startPostOpenDrawerCatchUp({
+                  variantId: debugVariantId,
+                  sectionIds: drawerSectionIds,
+                  expectedPriceText,
+                  cartDataForEvents: finalCartData,
+                });
               } else {
                 dispatchCartSyncEvents(finalCartData);
                 window.location.assign(buildShopifyPath('cart'));
