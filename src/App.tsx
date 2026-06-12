@@ -15,6 +15,7 @@ import { applyConfigState, getConfigState, exportToGLB } from './utils/ar';
 import { cameraActions } from './utils/cameraRef';
 import { RalModal } from './components/ral/RalModal';
 import { formatFrac } from './utils/format';
+import { CartProgressOverlay } from './components/CartProgressOverlay';
 import QRious from 'qrious';
 
 import { isApiReachable, loadPricingFromAPI } from './config/pricing';
@@ -2624,6 +2625,10 @@ export default function App({ productId, variantId }: AppProps = {}) {
             }
           }}
         />
+
+        {isSubmitting && submittingAction && (
+          <CartProgressOverlay action={submittingAction} step={submittingStep} />
+        )}
       </div>
 
       <RalModal open={ralOpen} onClose={() => setRalOpen(false)} />
