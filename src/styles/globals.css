@@ -737,6 +737,16 @@ header {
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
   animation: cart-overlay-in 0.25s ease-out both;
+  /* Block scroll/zoom gestures while in flight (matters on the mobile fixed overlay). */
+  touch-action: none;
+}
+/* Mobile: the stacked configurator is taller than the screen, so an absolute
+   overlay centers its card off-viewport (user had to scroll up to find it).
+   Anchor to the viewport instead — the card appears over whatever is on screen.
+   App.tsx raises the shadow host's z-index chain while this is open so theme
+   headers/sections can't paint over it on the Shopify embed. */
+@media (max-width: 767px) {
+  .cart-progress-overlay { position: fixed; z-index: 2147483000; }
 }
 @keyframes cart-overlay-in { from { opacity: 0; } to { opacity: 1; } }
 .cart-progress-card {

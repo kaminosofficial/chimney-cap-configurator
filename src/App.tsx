@@ -1690,6 +1690,33 @@ export default function App({ productId, variantId }: AppProps = {}) {
     setSubmittingStep('');
   };
 
+  // While the cart progress overlay is up on Shopify, temporarily raise the
+  // z-index of the shadow host's whole ancestor chain. On mobile the overlay is
+  // position:fixed (viewport-anchored), and inside the shadow root its z-index
+  // can't escape theme stacking contexts — without this, sticky headers / later
+  // sections can paint over it. Original inline styles are restored on hide.
+  const cartOverlayActive = isSubmitting && submittingAction !== null;
+  useEffect(() => {
+    if (!cartOverlayActive) return;
+    const rootNode = appLayoutRef.current?.getRootNode();
+    const host = rootNode instanceof ShadowRoot ? (rootNode.host as HTMLElement) : null;
+    if (!host) return; // standalone SPA — no shadow root, nothing to fix
+    const touched: Array<{ el: HTMLElement; zIndex: string; position: string }> = [];
+    let el: HTMLElement | null = host;
+    while (el && el !== document.body && el !== document.documentElement) {
+      touched.push({ el, zIndex: el.style.zIndex, position: el.style.position });
+      if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+      el.style.zIndex = '2147483000';
+      el = el.parentElement;
+    }
+    return () => {
+      touched.forEach(({ el: t, zIndex, position }) => {
+        t.style.zIndex = zIndex;
+        t.style.position = position;
+      });
+    };
+  }, [cartOverlayActive]);
+
   useEffect(() => {
     DEBUG() && console.log('Configurator app boot props:', {
       productId: productId || null,
