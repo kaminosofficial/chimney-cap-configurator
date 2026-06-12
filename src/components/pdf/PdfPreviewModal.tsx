@@ -92,6 +92,8 @@ export function PdfPreviewModal({ open, onClose, captureSnapshot }: PdfPreviewMo
       const el = (reportRef.current?.querySelector('#print-mount') ?? null) as HTMLElement | null;
       const blob = await generatePdf(el);
       if (blob) await deliverPdf(blob, filename);
+    } catch (error) {
+      console.error('Error in handleDownload:', error);
     } finally {
       setIsDownloading(false);
     }

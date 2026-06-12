@@ -1,13 +1,29 @@
 import { jsPDF } from 'jspdf';
 import { toCanvas } from 'html-to-image';
+import html2canvas from 'html2canvas';
+
+function withTimeout<T>(promise: Promise<T>, ms: number, errorMsg: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(errorMsg)), ms))
+  ]);
+}
+
+const isMobileDevice = (): boolean =>
+  /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 // Rasterizes an off-screen DOM element to an A4 PDF and returns it as a Blob.
 //
-// We use html-to-image (SVG <foreignObject>) rather than html2canvas because
-// html2canvas does its own manual text layout and mangles letter-spacing and
-// word spaces on iOS Safari — the exported text came out as overlapping
-// gibberish. foreignObject rasterizes through the browser's own renderer, so
-// the output pixel-matches the on-screen preview on every device.
+// Two rendering engines are used depending on the platform:
+//
+// • Desktop — html-to-image (SVG <foreignObject>). Rasterizes through the
+//   browser's own renderer so the output pixel-matches the on-screen preview.
+//
+// • Mobile / iOS — html2canvas. The SVG foreignObject path hangs indefinitely
+//   on iOS WebKit when the DOM contains base64 data URIs (logo, 3D screenshot).
+//   html2canvas uses manual DOM painting which reliably works on all platforms.
+//   Letter-spacing rendering is slightly less precise but the output is clean.
 //
 // Accepts the element directly (not an id) so it resolves inside a Shadow DOM.
 // Returns the PDF Blob so the caller can decide how to deliver it (download on
@@ -19,30 +35,106 @@ export async function generatePdf(element: HTMLElement | null): Promise<Blob | n
   }
 
   try {
-    // Ensure fonts are settled so glyph metrics match the preview.
+    // Ensure fonts are settled with a safety timeout so they don't block forever.
     if (document.fonts && document.fonts.ready) {
-      try { await document.fonts.ready; } catch { /* non-fatal */ }
+      try {
+        await withTimeout(document.fonts.ready, 1500, 'Fonts load timeout');
+      } catch { /* non-fatal */ }
     }
 
     // offsetWidth/Height are the element's true layout size and are unaffected
-    // by the preview wrapper's CSS transform, so the capture is full-size.
+    // by the preview wrapper's CSS transform.
     const width = element.offsetWidth || 794;
     const height = element.offsetHeight || 1123;
 
-    const canvas = await toCanvas(element, {
-      pixelRatio: 2,
-      backgroundColor: '#ffffff',
-      width,
-      height,
-      // NOTE: do NOT enable cacheBust — it appends a query string to every
-      // resource URL, which corrupts the inline data: URIs (logo + hero image)
-      // and produces a blank capture / hang.
-      //
-      // The report renders in the system fallback font (Jost is not loaded), so
-      // there is nothing to embed — skipping avoids slow/failing font fetches
-      // and keeps the output identical to the preview.
-      skipFonts: true,
-    });
+    // Create a temporary, off-screen container that is completely un-transformed.
+    // We append it to the element's root (which preserves Shadow DOM styles if applicable)
+    // or fallback to document.body.
+    const root = element.getRootNode();
+    const containerToAppend = (root && 'appendChild' in root && root !== document)
+      ? (root as any)
+      : document.body;
+
+    const tempContainer = document.createElement('div');
+    tempContainer.style.position = 'fixed';
+    tempContainer.style.left = '-9999px';
+    tempContainer.style.top = '0';
+    tempContainer.style.width = `${width}px`;
+    tempContainer.style.height = `${height}px`;
+    tempContainer.style.background = '#ffffff';
+    tempContainer.style.zIndex = '-9999';
+    tempContainer.style.transform = 'none';
+
+    // Clone the element so we don't mutate the live UI preview.
+    const clone = element.cloneNode(true) as HTMLElement;
+    clone.style.transform = 'none';
+    clone.style.margin = '0';
+    clone.style.padding = '0';
+    clone.style.width = `${width}px`;
+    clone.style.height = `${height}px`;
+
+    // Strip letter-spacing on mobile/iOS to prevent html2canvas text overlapping/garbling
+    if (isMobileDevice()) {
+      clone.querySelectorAll('*').forEach((node) => {
+        const el = node as HTMLElement;
+        if (el.style.letterSpacing) {
+          el.style.letterSpacing = '0';
+        }
+      });
+      if (clone.style.letterSpacing) {
+        clone.style.letterSpacing = '0';
+      }
+    }
+
+    tempContainer.appendChild(clone);
+    containerToAppend.appendChild(tempContainer);
+
+    let canvas: HTMLCanvasElement;
+
+    try {
+      if (isMobileDevice()) {
+        // ── Mobile path: html2canvas ──
+        canvas = await withTimeout(
+          html2canvas(clone, {
+            scale: 2,
+            backgroundColor: '#ffffff',
+            width,
+            height,
+            useCORS: true,
+            allowTaint: true,
+            logging: false,
+          }),
+          15000,
+          'PDF generation timed out (mobile)'
+        );
+      } else {
+        // ── Desktop path: html-to-image (SVG foreignObject) ──
+        // Pixel-perfect output through the browser's own renderer.
+        canvas = await withTimeout(
+          toCanvas(clone, {
+            pixelRatio: 2,
+            backgroundColor: '#ffffff',
+            width,
+            height,
+            // NOTE: do NOT enable cacheBust — it appends a query string to every
+            // resource URL, which corrupts the inline data: URIs (logo + hero image)
+            // and produces a blank capture / hang.
+            //
+            // The report renders in the system fallback font (Jost is not loaded), so
+            // there is nothing to embed — skipping avoids slow/failing font fetches
+            // and keeps the output identical to the preview.
+            skipFonts: true,
+          }),
+          8000,
+          'PDF generation timed out (desktop)'
+        );
+      }
+    } finally {
+      // Clean up the temporary container
+      try {
+        containerToAppend.removeChild(tempContainer);
+      } catch { /* ignore */ }
+    }
 
     const imgData = canvas.toDataURL('image/jpeg', 0.92);
 
@@ -51,17 +143,19 @@ export async function generatePdf(element: HTMLElement | null): Promise<Blob | n
     const pageHeight = pdf.internal.pageSize.getHeight();  // 297
     const imgHeight = (canvas.height * pageWidth) / canvas.width;
 
-    if (imgHeight <= pageHeight + 0.5) {
-      pdf.addImage(imgData, 'JPEG', 0, 0, pageWidth, imgHeight);
+    const tolerance = 10; // 10mm height tolerance (~38px)
+    if (imgHeight <= pageHeight + tolerance) {
+      // Fit exactly on a single page
+      pdf.addImage(imgData, 'JPEG', 0, 0, pageWidth, pageHeight);
     } else {
       // Slice across multiple A4 pages so nothing is clipped.
       let remaining = imgHeight;
       let position = 0;
-      while (remaining > 0.5) {
+      while (remaining > tolerance) {
         pdf.addImage(imgData, 'JPEG', 0, position, pageWidth, imgHeight);
         remaining -= pageHeight;
         position -= pageHeight;
-        if (remaining > 0.5) pdf.addPage();
+        if (remaining > tolerance) pdf.addPage();
       }
     }
 

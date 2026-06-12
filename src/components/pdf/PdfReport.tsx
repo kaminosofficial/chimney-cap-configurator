@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useConfigStore } from '../../store/configStore';
-import { KAMINOS_LOGO_WHITE } from './kaminosLogo';
+import { KAMINOS_LOGO_WHITE, getCroppedLogo } from './kaminosLogo';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PdfReport  —  "Airy" spec-sheet layout
@@ -57,12 +57,18 @@ export function PdfReport({ snapshotUrl }: PdfReportProps) {
   const dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   const totalPrice = config.price * config.quantity;
 
+  const [logoAssets, setLogoAssets] = useState<{ symbol: string; text: string } | null>(null);
+
+  useEffect(() => {
+    getCroppedLogo().then(setLogoAssets);
+  }, []);
+
   // html2canvas does NOT honor object-fit / width:auto reliably — it stretches
   // images to fill their box. To prevent squishing we size the hero with an
   // explicit width AND height that preserve the image's TRUE aspect ratio,
   // bounded by a max box. Measured on load.
   const HERO_MAX_W = 440;
-  const HERO_MAX_H = 250;
+  const HERO_MAX_H = 230;
   const [heroDims, setHeroDims] = useState<{ w: number; h: number } | null>(null);
   function onHeroLoad(e: React.SyntheticEvent<HTMLImageElement>) {
     const img = e.currentTarget;
@@ -88,36 +94,48 @@ export function PdfReport({ snapshotUrl }: PdfReportProps) {
         WebkitFontSmoothing: 'antialiased',
       }}
     >
-      {/* ── Header ── */}
       <header
         style={{
           background: C.ink,
           color: '#fff',
-          padding: '40px 53px 32px',
+          padding: '30px 53px',
           borderBottom: `2.5px solid ${C.gold}`,
-          position: 'relative',
           display: 'flex',
-          flexDirection: 'column',
+          justifyContent: 'space-between',
           alignItems: 'center',
-          gap: '14px',
           flexShrink: 0,
         }}
       >
-        {/* Centered brand: logo + subtitle. Explicit width+height at the logo's
-            true 600×214 aspect ratio so html2canvas can't squish it. */}
-        <img
-          src={KAMINOS_LOGO_WHITE}
-          alt="Kaminos"
-          width={171}
-          height={61}
-          style={{ width: '171px', height: '61px', display: 'block' }}
-        />
-        <div style={{ fontSize: '13px', letterSpacing: '0.24em', textTransform: 'uppercase', color: C.gold, fontWeight: 500, textAlign: 'center' }}>
-          Multi-Flue Chimney Cap Specification
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', alignItems: 'flex-start' }}>
+          {logoAssets ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', alignItems: 'center' }}>
+              <img
+                src={logoAssets.symbol}
+                alt="Kaminos Logo Mark"
+                style={{ height: '32px', display: 'block' }}
+              />
+              <img
+                src={logoAssets.text}
+                alt="Kaminos"
+                style={{ height: '20px', display: 'block' }}
+              />
+            </div>
+          ) : (
+            <img
+              src={KAMINOS_LOGO_WHITE}
+              alt="Kaminos"
+              width={171}
+              height={61}
+              style={{ width: '171px', height: '61px', display: 'block' }}
+            />
+          )}
+          <div style={{ fontSize: '20px', letterSpacing: '0.18em', textTransform: 'uppercase', color: C.gold, fontWeight: 600, textAlign: 'left' }}>
+            Multi-Flue Chimney Cap Specification
+          </div>
         </div>
 
-        {/* Date / URL pinned to the top-right corner */}
-        <div style={{ position: 'absolute', top: '40px', right: '53px', textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        {/* Date / URL pinned to the right and vertically centered */}
+        <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-end' }}>
           <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff', letterSpacing: '0.02em' }}>{dateStr}</div>
           <div style={{ fontSize: '12px', color: C.metaUrl, letterSpacing: '0.04em' }}>kaminos.com</div>
         </div>
@@ -127,7 +145,7 @@ export function PdfReport({ snapshotUrl }: PdfReportProps) {
       <div
         style={{
           flexShrink: 0,
-          padding: '32px 53px 22px',
+          padding: '24px 53px 16px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -137,6 +155,7 @@ export function PdfReport({ snapshotUrl }: PdfReportProps) {
           <img
             src={snapshotUrl}
             alt="Configured chimney cap"
+            id="pdf-hero-image"
             onLoad={onHeroLoad}
             style={
               heroDims
@@ -158,16 +177,15 @@ export function PdfReport({ snapshotUrl }: PdfReportProps) {
       <div
         style={{
           flex: '1 1 auto',
-          padding: '36px 53px 34px',
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          columnGap: '60px',
-          rowGap: '34px',
-          alignContent: 'start',
+          padding: '28px 53px 28px',
+          display: 'flex',
+          flexDirection: 'row',
+          gap: '60px',
+          alignItems: 'flex-start',
         }}
       >
         {/* Left column */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '34px' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '24px' }}>
           <div>
             <SectionLabel>Core Configuration</SectionLabel>
             <SpecList>
@@ -225,7 +243,7 @@ export function PdfReport({ snapshotUrl }: PdfReportProps) {
         </div>
 
         {/* Right column */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '34px' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '24px' }}>
           <div>
             <SectionLabel>Material &amp; Finish</SectionLabel>
             <SpecList>
@@ -281,7 +299,7 @@ export function PdfReport({ snapshotUrl }: PdfReportProps) {
               border: `1.5px solid ${C.gold}`,
               borderRadius: '10px',
               background: C.cardBg,
-              padding: '26px 26px 23px',
+              padding: '20px 20px 18px',
             }}
           >
             <div
@@ -375,7 +393,7 @@ function SpecRow({ label, value }: { label: string; value: string }) {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'baseline',
-        padding: '9.5px 0',
+        padding: '8px 0',
         borderBottom: `1px solid ${C.hair}`,
       }}
     >
