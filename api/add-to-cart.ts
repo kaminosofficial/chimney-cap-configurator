@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { fetchPricingFromPublicSheet } from '../lib/pricing-sheet.js';
 import { getShopifyAccessToken, SHOPIFY_STORE, warnUnknownOrigin } from '../lib/shopify-auth.js';
 import { RAL_COLORS } from '../src/config/ralColors.js';
+import { computeCapPriceBreakdown } from '../src/utils/capPricing.js';
 
 const GOOGLE_SHEET_ID = (process.env.GOOGLE_SHEET_ID || '').trim();
 const SHOPIFY_PRODUCT_ID = (process.env.SHOPIFY_PRODUCT_ID || '').trim() || undefined;
@@ -84,69 +85,11 @@ function getColorLabel(hex: string): string {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Server-side cap pricing (must match src/store/configStore.ts)      */
-/*  The chase block in `src/utils/pricing.ts` is for chase covers and  */
-/*  uses different math; we don't call it here.                         */
+/*  Server-side cap pricing — same shared implementation as the client */
+/*  (src/utils/capPricing.ts), called with sheet-fetched pricing so it */
+/*  stays tamper-proof. The chase math in `src/utils/pricing.ts` is    */
+/*  NOT used for the cap.                                              */
 /* ------------------------------------------------------------------ */
-
-interface CapPricing {
-    MARGIN_RATE: number;
-    PAINTED_MULTIPLIER: number;
-    MATERIAL_MULT: Record<string, number>;
-    CAP_MULTIPLIERS: Record<string, number>;
-    CAP_BRACKETS: { flat: { w_max: number; l_max: number }; non_flat: { w_max: number; l_max: number } };
-    CAP_SURCHARGES: {
-        steep_pitch_pct: number; steep_pitch_threshold: number;
-        tall_skirt_pct: number; tall_skirt_threshold: number;
-        extra_overhang_pct: number; std_overhang_flat: number; std_overhang_non_flat: number;
-        tall_screen_pct: number; tall_screen_threshold: number;
-    };
-}
-
-function computeCapPriceServerSide(c: CapOrderConfig, pricing: CapPricing): number {
-    const w = c.width || 24;
-    const l = c.length || 36;
-    const screen = c.screen_height || 10;
-    const mount = c.mount || 'skirt';
-    const lid_type = c.lid_type || 'flat';
-    const material = c.material || 'stainless';
-
-    let multiplier = 1;
-    let baseCost = 0;
-
-    if (mount === 'top_mount' && lid_type === 'flat') {
-        const totalDim = w + l + screen;
-        let bracket = '0_60';
-        if (totalDim > 100) {
-            bracket = '101_plus';
-        } else if (totalDim > 70) {
-            bracket = '71_100';
-        } else if (totalDim > 60) {
-            bracket = '61_70';
-        }
-        multiplier = pricing.CAP_MULTIPLIERS[`top_mount_flat_${bracket}`] ?? 1;
-        baseCost = totalDim * multiplier;
-    } else {
-        const bracketDims = lid_type === 'flat' ? pricing.CAP_BRACKETS.flat : pricing.CAP_BRACKETS.non_flat;
-        const bracket = w <= bracketDims.w_max && l <= bracketDims.l_max ? 'small' : 'large';
-        multiplier = pricing.CAP_MULTIPLIERS[`${mount}_${lid_type}_${bracket}`] ?? 1;
-        baseCost = (w + l) * multiplier;
-    }
-
-    let cost = baseCost;
-    cost *= pricing.MATERIAL_MULT[material] ?? 1;
-
-    const sur = pricing.CAP_SURCHARGES;
-    if ((c.lid_pitch ?? 5) > sur.steep_pitch_threshold) cost *= 1 + sur.steep_pitch_pct;
-    if (mount !== 'top_mount' && (c.vertical_skirt ?? 3) > sur.tall_skirt_threshold) cost *= 1 + sur.tall_skirt_pct;
-    const stdOverhang = lid_type === 'flat' ? sur.std_overhang_flat : sur.std_overhang_non_flat;
-    if ((c.lid_overhang ?? stdOverhang) > stdOverhang) cost *= 1 + sur.extra_overhang_pct;
-    if (screen > sur.tall_screen_threshold) cost *= 1 + sur.tall_screen_pct;
-    if (c.powder_coat && material !== 'copper') cost *= pricing.PAINTED_MULTIPLIER;
-
-    const marginMultiplier = pricing.MARGIN_RATE > 0 ? pricing.MARGIN_RATE : 1;
-    return cost * marginMultiplier;
-}
 
 /* ------------------------------------------------------------------ */
 /*  Line-item properties shown in Shopify cart / order                 */
@@ -434,8 +377,8 @@ async function waitForStorefrontPropagation(
     expectedPrice: string,
     storefrontDomain: string,
     productHandle: string | null,
-    maxWaitMs = 18000,
-    intervalMs = 1500
+    maxWaitMs = 3500,
+    intervalMs = 1200
 ): Promise<boolean> {
     const start = Date.now();
     const numericId = Number(variantId);
@@ -550,14 +493,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ]);
 
         // 3. Server-side price (tamper-proof — recomputed from sheet pricing, never trusts client).
-        const unitPrice = computeCapPriceServerSide(config, pricing as CapPricing);
+        const breakdown = computeCapPriceBreakdown(config, pricing);
+        // Guard: never create a purchasable variant from degraded pricing. A missed
+        // multiplier key (unknown mount/lid combo) or a zeroed margin would silently
+        // underprice the order by 3×+ — better to refuse and let the user retry.
+        if (!breakdown.multiplierFromSheet || !(pricing.MARGIN_RATE > 0)) {
+            console.error('[CART] Degraded pricing — refusing to create variant', {
+                multiplierKey: breakdown.multiplierKey,
+                multiplierFromSheet: breakdown.multiplierFromSheet,
+                marginRate: pricing.MARGIN_RATE,
+            });
+            return res.status(503).json({ error: 'Pricing is temporarily unavailable. Please try again in a minute.' });
+        }
+        const unitPrice = breakdown.total;
         const priceStr = unitPrice.toFixed(2);
         console.log('[CART] Server-computed price:', priceStr);
 
         // 4. Hash → fetch variants → reuse or create.
         const hash = configHash(config, priceStr);
         const allVariants = await fetchAllVariants(config.shopifyProductId, accessToken);
-        await proactiveCleanup(config.shopifyProductId, accessToken, allVariants);
+        // Cleanup policy: only block the request when creation would otherwise hit
+        // the 100-variant limit. Below that, run it concurrently — it proceeds while
+        // we create the variant and poll propagation, and the emergency-cleanup-on-422
+        // path still backstops the worst case.
+        if (allVariants.length >= VARIANT_LIMIT - 1) {
+            await proactiveCleanup(config.shopifyProductId, accessToken, allVariants);
+        } else {
+            proactiveCleanup(config.shopifyProductId, accessToken, allVariants)
+                .catch(e => console.warn('[CART] Background cleanup failed:', e?.message));
+        }
 
         const existingId = findInVariants(allVariants, hash, priceStr);
         let variantId: string | undefined;
@@ -587,15 +551,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             });
         }
 
-        // 5. Wait until the storefront cart endpoint accepts the variant.
+        // 5. Quick propagation hint only (~3.5s max). The client owns the real
+        //    retry loop (addToCartWithRetry handles 422/$0 with backoff), so
+        //    blocking here just delays the response without adding reliability.
         let propagated = true;
         if (!existingId) {
-            propagated = await waitForStorefrontPropagation(variantId, priceStr, storefrontDomain, productHandle, 18000, 1500);
+            propagated = await waitForStorefrontPropagation(variantId, priceStr, storefrontDomain, productHandle, 3500, 1200);
         }
 
         // 6. Line item properties + response.
         const properties = buildCartProperties(config);
-        const quantity = Math.max(1, Math.min(99, Math.round(config.quantity || 1)));
+        // Clamp matches the client cap (MAX_QTY = 10 in CartRow.tsx).
+        const quantity = Math.max(1, Math.min(10, Math.round(config.quantity || 1)));
         const totalMs = Date.now() - handlerStart;
         console.log('[CART] === DONE ===', totalMs, 'ms');
 

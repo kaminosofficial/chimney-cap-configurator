@@ -212,7 +212,7 @@ The IIFE detects its own origin by scanning `<script>` tags for one containing `
 ### `GET /api/pricing`
 
 - Fetches pricing constants from Google Sheets (public gviz endpoint)
-- In-memory cache with 5-minute TTL
+- In-memory cache with 2-minute TTL (`PRICING_CACHE_TTL` in `lib/pricing-sheet.ts`)
 - Returns JSON with pricing constants (EXT_ANCHOR, EXT_S_W, EXT_S_L, etc.)
 - **Fallback**: If Google Sheets is unreachable, returns hardcoded default constants (see `DEFAULT_PRICING` in `lib/pricing-sheet.ts`) with a server-side warning log
 
@@ -357,7 +357,7 @@ The sheet uses a key-value format. The parser walks every row and picks up adjac
 | `CAP_EXTRA_OVERHANG_PCT` / `CAP_STD_OVERHANG_FLAT` / `CAP_STD_OVERHANG_NON_FLAT` | 10% / 3 / 4 | Surcharge when `lid_overhang > std` (3 for flat, 4 for non-flat). PDF rule: "Add 10% for Extra Overhang up to 6"". |
 | `CAP_TALL_SCREEN_PCT` / `CAP_TALL_SCREEN_THRESHOLD` | 5% / 16 | Surcharge when `screen_height > threshold` (any height ≥ 17", **no upper cap** — replaces the PDF's > 24" Call-for-Pricing rule). |
 
-Changes take effect within **5 minutes** (server cache TTL). No code changes or redeployment needed.
+Changes take effect within **~2 minutes** (server cache TTL). No code changes or redeployment needed.
 
 ---
 
@@ -377,9 +377,13 @@ The pricing formula is implemented in `computePricingBreakdown()` which is share
 
 ### Cap Pricing
 
-**Files**: `src/store/configStore.ts` → `computeCapPriceBreakdown(s)` (full structured breakdown) + `computeCapPrice(s)` (thin wrapper returning `.total`). The chase `computePricingBreakdown` is **not** called for the cap — it has its own pipeline. All multipliers, bracket thresholds, and surcharge percentages live **only** in the **Cap configurator** block (columns H/I) of the Google Sheet. The `CAP_MULTIPLIERS` / `CAP_BRACKETS` / `CAP_SURCHARGES` defaults in `lib/pricing-sheet.ts` and `src/config/pricing.ts` are intentionally **empty / zero** — prices look obviously broken (multiplier = 1, no surcharges) until the sheet rows are pasted, and that mismatch is the signal to paste them.
+**Files**: `src/utils/capPricing.ts` → `computeCapPriceBreakdown(s, pricing)` is the **single shared implementation** used by BOTH the client (`src/store/configStore.ts` wraps it with the live `PRICING` object and re-exports `computeCapPriceBreakdown(s)` / `computeCapPrice(s)`) and the server (`api/add-to-cart.ts` calls it with sheet-fetched pricing — tamper-proof, never trusts the client). The chase `computePricingBreakdown` in `src/utils/pricing.ts` is **not** called for the cap. All multipliers, bracket thresholds, and surcharge percentages live in the **Cap configurator** block (columns H/I) of the Google Sheet. The `CAP_MULTIPLIERS` / `CAP_BRACKETS` / `CAP_SURCHARGES` defaults in `lib/pricing-sheet.ts` and `src/config/pricing.ts` **mirror the live sheet** (kept in rough sync) so the initial render and transient Sheets outages produce sensible prices instead of $0; live sheet values override them within ~2 minutes.
 
-**Debug panel**: `<PriceBreakdownPanel>` in `src/components/sidebar/PriceBreakdownPanel.tsx` renders inside the dim-overlay whenever **Show dimensions** is open. It shows the bracket selection rule, the live sheet key being read (`MULT_<MOUNT>_<LID>_<BRACKET>`), each surcharge step with its applied/skipped reason, and the running cost at every step. A red ⚠ next to the multiplier means the lookup missed the sheet (key not present → fallback × 1). The panel is **temporary** — meant to be removed once the live sheet values are verified.
+**Degraded-pricing guard**: `api/add-to-cart.ts` returns **503 "Pricing is temporarily unavailable"** instead of creating a variant when the multiplier lookup missed the pricing table (`multiplierFromSheet === false`) or `MARGIN_RATE ≤ 0` — prevents silently underpriced purchasable variants.
+
+**Top Mount + Flat bracket scheme**: unlike all other mount/lid combos (small/large on W/L), `top_mount` + `flat` prices on **total dimension W + L + screen_height** with four brackets: `top_mount_flat_0_60`, `_61_70`, `_71_100`, `_101_plus`; base = totalDim × multiplier.
+
+**Debug panel**: `<PriceBreakdownPanel>` in `src/components/sidebar/PriceBreakdownPanel.tsx` is currently **not mounted anywhere** (kept as a debugging aid — mount it temporarily when verifying sheet values). It shows the bracket rule, the live sheet key, each surcharge step with its applied/skipped reason, and the running cost.
 
 **No Call-for-Pricing state.** Every input combination (including copper, screens > 24", and W/L beyond the printed price-sheet ranges) produces a numeric price. The `PriceDisplay` "Call for Pricing" branch has been deleted as unreachable.
 
@@ -450,7 +454,7 @@ finalPrice = cost × MARGIN_RATE        (multiplier semantics; fallback × 1 whe
 Each configuration produces a deterministic hash using FNV-1a:
 - Config values are snapped to 1/8" (`r8 = Math.round(n * 8) / 8`) to prevent floating-point drift
 - Hash input includes: dimensions, material, gauge, toggles, holes, collar settings, price
-- Hash format: `CC-XXXXXXXX` (8-char hex)
+- Hash format: `MFC-XXXXXXXX` (8-char hex; the cap fork uses the `MFC-` prefix — cleanup and reuse logic all filter on `MFC-*`)
 - Same config + same price = same hash → variant reused (no propagation delay)
 
 ### Variant Lifecycle

@@ -1,6 +1,7 @@
-import { jsPDF } from 'jspdf';
-import { toCanvas } from 'html-to-image';
-import html2canvas from 'html2canvas';
+// jsPDF / html2canvas / html-to-image are imported dynamically inside
+// generatePdf() — together they're ~550KB and only a tiny fraction of visitors
+// ever export a PDF. In the SPA build they split into a lazy chunk; the Shopify
+// IIFE still inlines them (inlineDynamicImports), so behavior there is unchanged.
 
 function withTimeout<T>(promise: Promise<T>, ms: number, errorMsg: string): Promise<T> {
   return Promise.race([
@@ -35,6 +36,13 @@ export async function generatePdf(element: HTMLElement | null): Promise<Blob | n
   }
 
   try {
+    // Load the heavy libs on demand: jsPDF always, plus only the rasterizer the
+    // current platform actually uses (html2canvas on mobile, html-to-image on desktop).
+    const [{ jsPDF }, rasterizer] = await Promise.all([
+      import('jspdf'),
+      isMobileDevice() ? import('html2canvas') : import('html-to-image'),
+    ]);
+
     // Ensure fonts are settled with a safety timeout so they don't block forever.
     if (document.fonts && document.fonts.ready) {
       try {
@@ -94,6 +102,7 @@ export async function generatePdf(element: HTMLElement | null): Promise<Blob | n
     try {
       if (isMobileDevice()) {
         // ── Mobile path: html2canvas ──
+        const html2canvas = (rasterizer as typeof import('html2canvas')).default;
         canvas = await withTimeout(
           html2canvas(clone, {
             scale: 2,
@@ -110,6 +119,7 @@ export async function generatePdf(element: HTMLElement | null): Promise<Blob | n
       } else {
         // ── Desktop path: html-to-image (SVG foreignObject) ──
         // Pixel-perfect output through the browser's own renderer.
+        const { toCanvas } = rasterizer as typeof import('html-to-image');
         canvas = await withTimeout(
           toCanvas(clone, {
             pixelRatio: 2,

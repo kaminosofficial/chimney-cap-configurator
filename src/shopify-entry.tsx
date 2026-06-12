@@ -105,14 +105,7 @@ import cssText from './styles/globals-scoped.css?inline';
         document.head.appendChild(link);
     }
 
-    // 2. Inject QRious if not already present
-    const QRIOUS_ID = 'chimney-cap-configurator-qrious';
-    if (!document.getElementById(QRIOUS_ID) && !(window as any).QRious) {
-        const script = document.createElement('script');
-        script.id = QRIOUS_ID;
-        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js';
-        document.head.appendChild(script);
-    }
+    // 2. (QRious is bundled via the npm package — no CDN injection needed.)
 
     // 3. Find mount point (new name preferred; chase-* names still accepted for backward compat)
     let mount: HTMLElement | null =

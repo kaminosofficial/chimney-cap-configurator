@@ -1,7 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Sidebar } from './components/sidebar/Sidebar';
-import { PdfPreviewModal } from './components/pdf/PdfPreviewModal';
+
+// Lazy: pulls in PdfReport + the base64 logo + (transitively) jsPDF/html2canvas.
+// In the SPA build this whole stack stays out of the main chunk until the user
+// actually opens the PDF preview. The Shopify IIFE inlines it (no code split).
+const PdfPreviewModal = lazy(() =>
+  import('./components/pdf/PdfPreviewModal').then(m => ({ default: m.PdfPreviewModal }))
+);
 import { CapViewer } from './components/viewer/CapViewer';
 import { useConfigStore, saveConfigForRestore, restoreConfigIfNeeded } from './store/configStore';
 
@@ -9,11 +15,12 @@ import { applyConfigState, getConfigState, exportToGLB } from './utils/ar';
 import { cameraActions } from './utils/cameraRef';
 import { RalModal } from './components/ral/RalModal';
 import { formatFrac } from './utils/format';
+import QRious from 'qrious';
 
 import { isApiReachable, loadPricingFromAPI } from './config/pricing';
 
 declare global {
-  interface Window { QRious: any; __chaseDebug?: boolean; }
+  interface Window { __chaseDebug?: boolean; }
 }
 
 declare const __LOCAL_IP__: string | undefined;
@@ -1798,8 +1805,8 @@ export default function App({ productId, variantId }: AppProps = {}) {
       const pageUrl = pagePath.split('?')[0];
       const url = pageUrl + '#ar=' + stateStr;
 
-      if (qrCanvasRef.current && window.QRious) {
-        new window.QRious({ element: qrCanvasRef.current, value: url, size: 200, background: 'white', foreground: 'black', level: 'M' });
+      if (qrCanvasRef.current) {
+        new QRious({ element: qrCanvasRef.current, value: url, size: 200, background: 'white', foreground: 'black', level: 'M' });
       }
       if (qrUrlRef.current) qrUrlRef.current.textContent = pageUrl;
       setQrActive(true);
@@ -2621,11 +2628,15 @@ export default function App({ productId, variantId }: AppProps = {}) {
 
       <RalModal open={ralOpen} onClose={() => setRalOpen(false)} />
 
-      <PdfPreviewModal
-        open={pdfOpen}
-        onClose={() => setPdfOpen(false)}
-        captureSnapshot={() => captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true, cropToContent: true })}
-      />
+      {pdfOpen && (
+        <Suspense fallback={null}>
+          <PdfPreviewModal
+            open={pdfOpen}
+            onClose={() => setPdfOpen(false)}
+            captureSnapshot={() => captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true, cropToContent: true })}
+          />
+        </Suspense>
+      )}
 
       {(() => {
         const portalTarget = (window as any).__chasePortalContainer as HTMLElement | undefined;
