@@ -794,7 +794,11 @@ async function postAddToCartApi(opts: {
       lastFetchErr = fetchErr;
       lastWasTimeout = timedOut;
 
-      if (timedOut || attempt >= ADD_TO_CART_API_MAX_ATTEMPTS) {
+      // A timeout usually means a cold start or transient stall, not a dead end —
+      // give it ONE retry (previously a timeout failed instantly with no retry).
+      // Pure network errors retry up to the attempt cap as before.
+      const timeoutRetryExhausted = timedOut && attempt >= 2;
+      if (timeoutRetryExhausted || attempt >= ADD_TO_CART_API_MAX_ATTEMPTS) {
         emitCartDebug('api-request-failed', {
           tag,
           attempt,
@@ -807,13 +811,21 @@ async function postAddToCartApi(opts: {
         break;
       }
 
+      // Force a fresh connection before retrying — a stale/poisoned HTTP/2 pool
+      // makes every reuse fail instantly, so back-to-back retries on the same
+      // pool all die the same way. A cache-busted GET re-establishes it (same
+      // idea as the page-load warm-up, applied mid-flow).
+      try {
+        void fetch(`${apiBase}/api/pricing?warm=${Date.now()}`, { cache: 'no-store' }).catch(() => { /* ignore */ });
+      } catch { /* ignore */ }
+
       const delayMs = getAddToCartApiRetryDelayMs(attempt);
-      console.warn(`[${tag}] /api/add-to-cart retry ${attempt}/${ADD_TO_CART_API_MAX_ATTEMPTS} after network error: ${fetchErr?.message || 'unknown'} (${attemptMs}ms)`);
+      console.warn(`[${tag}] /api/add-to-cart retry ${attempt}/${ADD_TO_CART_API_MAX_ATTEMPTS} after ${timedOut ? 'timeout' : 'network error'}: ${fetchErr?.message || 'unknown'} (${attemptMs}ms)`);
       emitCartDebug('api-request-retry', {
         tag,
         attempt,
         maxAttempts: ADD_TO_CART_API_MAX_ATTEMPTS,
-        reason: 'network',
+        reason: timedOut ? 'timeout' : 'network',
         attemptMs,
         totalMs,
         delayMs,
