@@ -1,6 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useConfigStore } from '../../store/configStore';
 import { KAMINOS_LOGO_WHITE, getCroppedLogo } from './kaminosLogo';
+import { RAL_COLORS } from '../../config/ralColors';
+
+// Human-readable powder-coat label: "Ruby Red (RAL 3002)" (matches the cart
+// line item), falling back to the hex if the color isn't a known RAL swatch.
+function ralLabel(hex: string): string {
+  const match = RAL_COLORS.find(c => c.hex.toLowerCase() === hex.toLowerCase());
+  return match ? `${match.name} (${match.ral})` : hex.toUpperCase();
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PdfReport  —  "Airy" spec-sheet layout
@@ -285,6 +293,9 @@ export function PdfReport({ snapshotUrl }: PdfReportProps) {
                     Powder Coat Color
                   </div>
                   <div style={{ fontSize: '12px', color: '#444', fontWeight: 600 }}>
+                    {ralLabel(config.powder_coat_color)}
+                  </div>
+                  <div style={{ fontSize: '10.5px', color: C.muted, marginTop: '1px' }}>
                     {config.powder_coat_color.toUpperCase()}
                   </div>
                 </div>

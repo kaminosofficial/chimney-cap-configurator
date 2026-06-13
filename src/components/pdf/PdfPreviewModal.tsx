@@ -118,6 +118,8 @@ export function PdfPreviewModal({ open, onClose, captureSnapshot }: PdfPreviewMo
         justifyContent: 'center',
         alignItems: 'center',
         padding: '16px',
+        // Stop wheel/touch over the backdrop from scrolling the page behind.
+        overscrollBehavior: 'contain',
       }}
       onClick={(e) => { if (e.target === e.currentTarget) handleClose(); }}
     >
@@ -172,6 +174,7 @@ export function PdfPreviewModal({ open, onClose, captureSnapshot }: PdfPreviewMo
           style={{
             flex: 1,
             overflowY: 'auto',
+            overscrollBehavior: 'contain',
             padding: '24px 16px',
             backgroundColor: '#e4e2de',
             display: 'flex',

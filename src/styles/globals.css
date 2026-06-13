@@ -479,6 +479,7 @@ header {
   background: rgba(0,0,0,0.4); backdrop-filter: blur(8px);
   display: flex; justify-content: center; align-items: center;
   z-index: 9999; opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
+  overscroll-behavior: contain;
 }
 .ral-modal-overlay.active { opacity: 1; pointer-events: auto; }
 .ral-modal-content {
@@ -515,7 +516,7 @@ header {
 }
 .ral-tab:hover { background: #e4e4eb; }
 .ral-tab.active { background: var(--accent); color: #fff; }
-.ral-grid-container { flex: 1; overflow-y: auto; padding: 24px; background: #fcfcfc; }
+.ral-grid-container { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 24px; background: #fcfcfc; }
 .ral-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 16px; }
 .ral-swatch-item { display: flex; flex-direction: column; align-items: center; cursor: pointer; transition: transform 0.15s; }
 .ral-swatch-item:hover { transform: translateY(-2px); }
