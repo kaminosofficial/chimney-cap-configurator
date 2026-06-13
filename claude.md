@@ -788,6 +788,23 @@ The client sends debug events to `POST /api/cart-debug` via `emitCartDebug()`. T
 
 These are visible in Vercel function logs.
 
+### Cart failure telemetry (persistent → Google Sheet)
+
+Vercel runtime logs are **ephemeral** (`vercel logs` only tails ~5 min, no backfill), so an intermittent Add-to-Cart / Buy-Now failure was impossible to diagnose after the fact. This subsystem **durably records terminal cart failures to a Google Sheet** and **correlates client ↔ server** to reveal orphaned variants. Ported from the chase-cover configurator (June 2026).
+
+**Flow:**
+1. **Client** (`src/App.tsx`): every Add/Buy flow generates a `requestId` (in the payload, reused across retries). `postAddToCartApi` attaches a per-attempt `attemptLog` + `failureKind` to the error it throws. On a terminal failure, both catch blocks call `recordCartFailure()`, which writes a lean record (requestId, phase, attemptLog, device, `navigator.connection`, `variantIdObtained`, **cap** config summary — mount/lid/width/length/skirts/material — no PII) to a capped `localStorage` ring buffer (`cap-cart-failures`). **Buffered because the network may be down at failure time.**
+2. **Flush** (`flushCartFailureReports`): buffered records POST to `/api/cart-debug` with `kind:'cart-failure-report'` on app mount, on the `online` event, and right after each failure. Dropped only when the server confirms `persisted:true`.
+3. **Server** (`api/cart-debug.ts`): forwards each report to the sheet via `appendCartLogRow()` (`lib/cart-log.ts`).
+4. **Correlation** (`api/add-to-cart.ts`): logs/echoes the `requestId`; on the new-variant-creation path it `await`s an `appendCartLogRow({type:'server-variant-created', …})` (1.5s timeout) so a `client-failure` row with the same `requestId` and `variantIdObtained:false` reveals an orphaned variant.
+
+**Storage**: `lib/cart-log.ts` POSTs rows to a **Google Apps Script web app** (`doPost` appends to a "Cart Log" tab). Env: `CART_LOG_WEBHOOK_URL` + `CART_LOG_TOKEN` (the cap has its **own** webhook/sheet, separate from chase). Resilient: if env is unset or the POST fails, it falls back to `console.log` and never throws.
+
+**Related `cleanup-variants` additions (June 2026):**
+- **Price anchor** (`anchor-preview` / `create-anchor`): a protected, non-`MFC-` **"Starting Price"** variant pins the product's "from $X" to the true floor. `computeFloorPrice` uses `computeCapPriceBreakdown` over the cheapest mount/lid/material at min dims (top_mount + flat), guarded by `multiplierFromSheet`. Current floor ≈ **$267.12**.
+- **`repin-featured`**: copies the current featured image to a permanent, **untied** position-1 slot so cleanup (which deletes a deleted `MFC-` variant's `image_id`) can never delete the product's main image. No-op if already untied.
+- **Dashboard image upload**: auto-resizes client-side (canvas, max 1600px JPEG) + mime detection + a 413 size guard so full-res photos don't exceed Vercel's ~4.5MB request-body limit.
+
 ### Origin Validation
 
 API handlers log warnings for requests from unknown origins via `warnUnknownOrigin()` in `lib/shopify-auth.ts`. Known origins: kaminos.com, chase-cover-configurator*.vercel.app, localhost.
