@@ -2795,20 +2795,25 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 priceText: expectedPriceText,
                 imageUrl: expectedImageUrl,
               };
-              // 12s budget: prefer opening the drawer WITH the item already in
-              // it over opening fast-but-stale and having the catch-up loop pop
-              // it in afterwards (client found that jarring). Rendered sections
-              // typically lag /cart.js by 0.5–6s; under storefront rate
-              // limiting the wait bails out after 2 throttled fetches instead
-              // of burning the ceiling (rateLimited: true). No separate
-              // pre-fetch: the wait's first iteration fetches immediately.
+              // 30s budget: the drawer must open WITH the item already in it —
+              // opening fast-but-empty and letting the catch-up loop pop it in
+              // a few seconds later is exactly what the client called out as
+              // confusing. For a brand-NEW variant, Shopify's server-rendered
+              // cart-drawer shows the line at $0 until the variant price
+              // propagates to the render layer, which (measured live) can take
+              // up to ~26s. The overlay stays up ("Opening your cart") for the
+              // whole wait, so this reads as finalizing, not a hang. A throttled
+              // IP bails out after 2 throttled fetches (rateLimited: true)
+              // instead of burning the ceiling, so the big budget is only ever
+              // spent on genuine propagation lag, which always resolves. No
+              // separate pre-fetch: the wait's first iteration fetches now.
               setSubmittingStep('cart:opening');
               const sectionReadiness = await waitForUsableRenderedSections({
                 sectionIds: drawerSectionIds,
                 tag: 'CART-SECTIONS',
                 expected: renderExpectation,
                 requirements: { requireVariant: true },
-                maxWaitMs: drawerSectionIds.length > 0 ? 12000 : 0,
+                maxWaitMs: drawerSectionIds.length > 0 ? 30000 : 0,
                 seedSections: [
                   { source: 'bundled-initial', sections: finalRetryResult.sectionsHtml },
                   { source: 'image-initial', sections: seededImageSections },

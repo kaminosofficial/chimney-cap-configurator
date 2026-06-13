@@ -43,6 +43,12 @@ export function CartProgressOverlay({ action, step }: Props) {
   const stepKey = step.includes(':') ? step.split(':')[1] : '';
   const found = steps.findIndex(s => s.key === stepKey);
   const active = found >= 0 ? found : 0;
+  // The "opening" wait can run longer for a brand-new variant (Shopify renders
+  // the cart line once the variant price propagates). Reassure instead of
+  // implying it should already be done.
+  const note = stepKey === 'opening'
+    ? 'Almost there — finalizing your cart preview.'
+    : 'Hand-built to your exact specs — this takes just a few seconds.';
 
   return (
     <div className="cart-progress-overlay" role="status" aria-live="polite">
@@ -65,7 +71,7 @@ export function CartProgressOverlay({ action, step }: Props) {
           })}
         </ul>
         <div className="cart-progress-note">
-          Hand-built to your exact specs — this takes just a few seconds.
+          {note}
         </div>
       </div>
     </div>

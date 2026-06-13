@@ -39,3 +39,7 @@ Thumbs.db
 
 .vercel
 .env*.local
+
+# local one-off tooling / scratch scripts — never deployed
+scratch/
+/test-*.cjs
