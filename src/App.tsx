@@ -1521,8 +1521,15 @@ async function waitForUsableRenderedSections(opts: {
  * WebGL canvases have transparency â€” compositing onto white prevents black artifacts.
  */
 function waitForNextFrame() {
+  // Resolve on the next animation frame OR after a short timer, whichever fires
+  // first. requestAnimationFrame is throttled/suspended when the tab is
+  // backgrounded — without the timer fallback the screenshot capture (which
+  // awaits this) would hang indefinitely if the user switches tabs mid-export.
   return new Promise<void>((resolve) => {
-    window.requestAnimationFrame(() => resolve());
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    window.requestAnimationFrame(finish);
+    window.setTimeout(finish, 150);
   });
 }
 
@@ -1613,7 +1620,9 @@ async function captureCanvasScreenshot(
   try {
 
     if (options?.resetView) {
-      cameraActions.reset();
+      // Frame the camera to the product's bounding box so it's a consistent size
+      // and fully visible in every capture (cart image + PDF), regardless of dims.
+      cameraActions.fitView();
       // Let OrbitControls and the canvas render settle before grabbing the image.
       await waitForNextFrame();
       await waitForNextFrame();

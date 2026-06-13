@@ -97,76 +97,69 @@ export async function generatePdf(element: HTMLElement | null): Promise<Blob | n
     tempContainer.appendChild(clone);
     containerToAppend.appendChild(tempContainer);
 
-    let canvas: HTMLCanvasElement;
-
-    try {
+    // Rasterize an element to a canvas using the platform's chosen engine.
+    const renderToCanvas = (target: HTMLElement, w: number, h: number): Promise<HTMLCanvasElement> => {
       if (isMobileDevice()) {
-        // ── Mobile path: html2canvas ──
         const html2canvas = (rasterizer as typeof import('html2canvas')).default;
-        canvas = await withTimeout(
-          html2canvas(clone, {
-            scale: 2,
-            backgroundColor: '#ffffff',
-            width,
-            height,
-            useCORS: true,
-            allowTaint: true,
-            logging: false,
-          }),
+        return withTimeout(
+          html2canvas(target, { scale: 2, backgroundColor: '#ffffff', width: w, height: h, useCORS: true, allowTaint: true, logging: false }),
           15000,
           'PDF generation timed out (mobile)'
         );
-      } else {
-        // ── Desktop path: html-to-image (SVG foreignObject) ──
-        // Pixel-perfect output through the browser's own renderer.
-        const { toCanvas } = rasterizer as typeof import('html-to-image');
-        canvas = await withTimeout(
-          toCanvas(clone, {
-            pixelRatio: 2,
-            backgroundColor: '#ffffff',
-            width,
-            height,
-            // NOTE: do NOT enable cacheBust — it appends a query string to every
-            // resource URL, which corrupts the inline data: URIs (logo + hero image)
-            // and produces a blank capture / hang.
-            //
-            // The report renders in the system fallback font (Jost is not loaded), so
-            // there is nothing to embed — skipping avoids slow/failing font fetches
-            // and keeps the output identical to the preview.
-            skipFonts: true,
-          }),
-          8000,
-          'PDF generation timed out (desktop)'
-        );
       }
-    } finally {
-      // Clean up the temporary container
-      try {
-        containerToAppend.removeChild(tempContainer);
-      } catch { /* ignore */ }
-    }
-
-    const imgData = canvas.toDataURL('image/jpeg', 0.92);
+      // Desktop: html-to-image (SVG foreignObject) — pixel-perfect via the browser's
+      // own renderer. cacheBust stays OFF (it corrupts the inline data: URIs); skipFonts
+      // avoids slow/failing font fetches (the report uses the system fallback font).
+      const { toCanvas } = rasterizer as typeof import('html-to-image');
+      return withTimeout(
+        toCanvas(target, { pixelRatio: 2, backgroundColor: '#ffffff', width: w, height: h, skipFonts: true }),
+        8000,
+        'PDF generation timed out (desktop)'
+      );
+    };
 
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageWidth = pdf.internal.pageSize.getWidth();   // 210
     const pageHeight = pdf.internal.pageSize.getHeight();  // 297
-    const imgHeight = (canvas.height * pageWidth) / canvas.width;
 
-    const tolerance = 10; // 10mm height tolerance (~38px)
-    if (imgHeight <= pageHeight + tolerance) {
-      // Fit exactly on a single page
-      pdf.addImage(imgData, 'JPEG', 0, 0, pageWidth, pageHeight);
-    } else {
-      // Slice across multiple A4 pages so nothing is clipped.
-      let remaining = imgHeight;
-      let position = 0;
-      while (remaining > tolerance) {
-        pdf.addImage(imgData, 'JPEG', 0, position, pageWidth, imgHeight);
-        remaining -= pageHeight;
-        position -= pageHeight;
-        if (remaining > tolerance) pdf.addPage();
+    try {
+      // Preferred path: the report is pre-paginated into explicit .pdf-page divs.
+      // Rasterize EACH page separately → one A4 PDF page each. Because each page is
+      // already a whole-A4 unit with whole sections, nothing is ever split across a
+      // page boundary and the pricing card stays pinned to the bottom of its page.
+      const pageEls = Array.from(clone.querySelectorAll('.pdf-page')) as HTMLElement[];
+      if (pageEls.length > 0) {
+        for (let i = 0; i < pageEls.length; i++) {
+          const pw = pageEls[i].offsetWidth || 794;
+          const ph = pageEls[i].offsetHeight || 1123;
+          const pageCanvas = await renderToCanvas(pageEls[i], pw, ph);
+          if (i > 0) pdf.addPage();
+          pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pageWidth, pageHeight);
+        }
+      } else {
+        // Fallback (no explicit pages): single tall capture, sliced into A4 pages.
+        const canvas = await renderToCanvas(clone, width, height);
+        const imgData = canvas.toDataURL('image/jpeg', 0.92);
+        const imgHeight = (canvas.height * pageWidth) / canvas.width;
+        const tolerance = 10;
+        if (imgHeight <= pageHeight + tolerance) {
+          pdf.addImage(imgData, 'JPEG', 0, 0, pageWidth, pageHeight);
+        } else {
+          let remaining = imgHeight;
+          let position = 0;
+          while (remaining > tolerance) {
+            pdf.addImage(imgData, 'JPEG', 0, position, pageWidth, imgHeight);
+            remaining -= pageHeight;
+            position -= pageHeight;
+            if (remaining > tolerance) pdf.addPage();
+          }
+        }
       }
+    } finally {
+      // Clean up the temporary container only after all pages are rasterized.
+      try {
+        containerToAppend.removeChild(tempContainer);
+      } catch { /* ignore */ }
     }
 
     return pdf.output('blob');
