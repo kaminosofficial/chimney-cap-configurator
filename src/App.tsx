@@ -883,12 +883,17 @@ function formatCheckoutErrorMessage(rawMessage: string, action: 'cart' | 'buy'):
 }
 
 const ADD_TO_CART_API_TIMEOUT_MS = 30000;
-const ADD_TO_CART_API_MAX_ATTEMPTS = 3;
+// 5 attempts with the backoff below spans ~12s of wall-clock for fast-rejecting
+// network errors (mobile-data blips: tower handoff, weak signal). The old 3
+// attempts / ~3s window gave up before a transient drop could recover. Timeouts
+// are still capped at 2 attempts (see timeoutRetryExhausted) so a genuinely
+// stuck cold start can't run 5×30s.
+const ADD_TO_CART_API_MAX_ATTEMPTS = 5;
 const RETRYABLE_ADD_TO_CART_STATUS = new Set([429, 502, 503, 504]);
 
 function getAddToCartApiRetryDelayMs(attempt: number): number {
-  const base = Math.min(1800, 450 * (2 ** Math.max(0, attempt - 1)));
-  return base + Math.round(Math.random() * 250);
+  const base = Math.min(3500, 600 * (2 ** Math.max(0, attempt - 1)));
+  return base + Math.round(Math.random() * 350);
 }
 
 async function postAddToCartApi(opts: {
