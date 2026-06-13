@@ -903,10 +903,14 @@ header {
     height: 35vh !important;
     min-height: 0;
     /* JS scroll observer toggles position between sticky/relative.
-       Default to relative so the canvas never bleeds above the widget. */
+       Default to relative so the canvas never bleeds above the widget.
+       z-index stays LOW (1): it must sit above the non-positioned sidebar
+       while sticky, but never above theme chrome — the Shopify header/search
+       dropdown is z-index:1000, and a higher value here let the sticky viewer
+       paint over the open search dropdown on mobile. */
     position: relative;
     top: 0;
-    z-index: 100;
+    z-index: 1;
   }
 
   /* Divider is purely for the desktop-style split layout; the sticky model
