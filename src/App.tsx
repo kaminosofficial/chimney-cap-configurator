@@ -580,6 +580,149 @@ function emitCartDebug(event: string, payload: Record<string, any>) {
   }).catch(() => undefined);
 }
 
+/* ------------------------------------------------------------------ */
+/*  Durable cart-failure telemetry (client side)                       */
+/* ------------------------------------------------------------------ */
+//
+// Terminal Add-to-Cart / Buy-Now failures are buffered in localStorage — the
+// network may be down at failure time, so we can't rely on POSTing telemetry
+// right then. Buffered records flush to /api/cart-debug (→ Google Sheet) once
+// connectivity returns (on mount, on the 'online' event, and right after each
+// failure in case the blip already cleared). Everything here is best-effort and
+// must never throw into the cart flow. See CLAUDE.md "Cart failure telemetry".
+
+const CART_FAILURE_STORE_KEY = 'cap-cart-failures';
+const CART_FAILURE_MAX = 20;
+
+function newRequestId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function') {
+      return (crypto as any).randomUUID();
+    }
+  } catch { /* ignore */ }
+  return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function classifyCartError(message?: string): string {
+  const m = (message || '').toLowerCase();
+  if (m.includes('timed out') || m.includes('timeout')) return 'timeout';
+  if (m.includes('failed to fetch') || m.includes('network error') || m.includes('load failed')) return 'network';
+  if (m.includes('429') || m.includes('rate limit') || m.includes('throttle') || m.includes('too many')) return 'rate-limit';
+  if (m.includes('http error') || m.includes('status')) return 'http';
+  return 'other';
+}
+
+function getConnectionInfo(): Record<string, any> | null {
+  try {
+    const c = (navigator as any).connection;
+    if (!c) return null;
+    return {
+      effectiveType: c.effectiveType ?? null,
+      downlink: c.downlink ?? null,
+      rtt: c.rtt ?? null,
+      saveData: c.saveData ?? null,
+    };
+  } catch { return null; }
+}
+
+function summarizeFailedConfig(config: any): Record<string, any> | null {
+  if (!config) return null;
+  return {
+    mount: config.mount, lid: config.lid_type,
+    w: config.width, l: config.length,
+    vs: config.vertical_skirt, hs: config.horizontal_skirt,
+    mat: config.material, pc: config.powder_coat,
+    screen: config.screen_height, qty: config.quantity,
+  };
+}
+
+function readFailureBuffer(): any[] {
+  try {
+    const raw = localStorage.getItem(CART_FAILURE_STORE_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+
+function writeFailureBuffer(records: any[]): void {
+  try {
+    localStorage.setItem(CART_FAILURE_STORE_KEY, JSON.stringify(records.slice(-CART_FAILURE_MAX)));
+  } catch { /* quota / unavailable — drop silently */ }
+}
+
+function recordCartFailure(ctx: {
+  requestId: string;
+  action: 'cart' | 'buy';
+  phase: string;
+  err: any;
+  variantId?: string | number | null;
+  variantReused?: boolean | null;
+  serverTimingMs?: number | null;
+  config: any;
+  apiBase: string;
+}): void {
+  try {
+    const record = {
+      at: new Date().toISOString(),
+      requestId: ctx.requestId,
+      action: ctx.action,
+      phase: ctx.phase,
+      failureKind: ctx.err?.failureKind || classifyCartError(ctx.err?.message),
+      errorMessage: String(ctx.err?.message || ctx.err || 'Unknown error').slice(0, 300),
+      attemptLog: ctx.err?.attemptLog || null,
+      variantId: ctx.variantId ?? null,
+      variantIdObtained: ctx.variantId != null,
+      variantReused: ctx.variantReused ?? null,
+      serverTimingMs: ctx.serverTimingMs ?? null,
+      device: {
+        ua: navigator.userAgent,
+        platform: (navigator as any).platform ?? null,
+        viewport: `${window.innerWidth}x${window.innerHeight}`,
+        iPhoneSafari: isIPhoneSafari(),
+      },
+      connection: getConnectionInfo(),
+      online: navigator.onLine,
+      apiReachableAtLoad: isApiReachable(),
+      apiBase: ctx.apiBase,
+      configSummary: summarizeFailedConfig(ctx.config),
+    };
+    const buf = readFailureBuffer();
+    buf.push(record);
+    writeFailureBuffer(buf);
+    console.warn('[CART-FAIL]', ctx.action, ctx.phase, record.failureKind, '— buffered for telemetry');
+    // The blip may already have cleared; try to flush immediately.
+    void flushCartFailureReports(ctx.apiBase);
+  } catch (e) {
+    DEBUG() && console.warn('[CART-FAIL] could not record failure', e);
+  }
+}
+
+let _failureFlushInFlight = false;
+async function flushCartFailureReports(apiBase: string): Promise<void> {
+  if (_failureFlushInFlight || !apiBase) return;
+  const pending = readFailureBuffer();
+  if (pending.length === 0) return;
+  _failureFlushInFlight = true;
+  try {
+    const res = await fetch(`${apiBase}/api/cart-debug`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'cart-failure-report', reports: pending }),
+      keepalive: true,
+    });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => null);
+    if (data && data.persisted) {
+      const sent = new Set(pending.map(r => `${r.requestId}|${r.at}`));
+      const remaining = readFailureBuffer().filter(r => !sent.has(`${r.requestId}|${r.at}`));
+      writeFailureBuffer(remaining);
+      DEBUG() && console.log('[CART-FAIL] flushed', pending.length, 'record(s) to telemetry sheet');
+    }
+  } catch { /* keep buffered; retry on next trigger */ } finally {
+    _failureFlushInFlight = false;
+  }
+}
+
 function applySectionUpdatesPreservingCartUi(sections: Record<string, string>, reason: string) {
   const wasOpen = isCartUiOpen();
   applySectionUpdates(sections);
@@ -911,6 +1054,9 @@ async function postAddToCartApi(opts: {
   const startedAt = performance.now();
   let lastFetchErr: any = null;
   let lastWasTimeout = false;
+  // Per-attempt timeline — attached to the thrown error so the failure record
+  // (and the telemetry sheet) shows exactly how each attempt died.
+  const attemptLog: Array<{ attempt: number; reason: string; status?: number; attemptMs: number; message?: string }> = [];
 
   for (let attempt = 1; attempt <= ADD_TO_CART_API_MAX_ATTEMPTS; attempt++) {
     const attemptStartedAt = performance.now();
@@ -947,6 +1093,7 @@ async function postAddToCartApi(opts: {
       }
 
       const delayMs = getAddToCartApiRetryDelayMs(attempt);
+      attemptLog.push({ attempt, reason: 'http', status: res.status, attemptMs });
       console.warn(`[${tag}] /api/add-to-cart retry ${attempt}/${ADD_TO_CART_API_MAX_ATTEMPTS} after HTTP ${res.status} (${attemptMs}ms)`);
       emitCartDebug('api-request-retry', {
         tag,
@@ -972,6 +1119,7 @@ async function postAddToCartApi(opts: {
       // Pure network errors retry up to the attempt cap as before.
       const timeoutRetryExhausted = timedOut && attempt >= 2;
       if (timeoutRetryExhausted || attempt >= ADD_TO_CART_API_MAX_ATTEMPTS) {
+        attemptLog.push({ attempt, reason: timedOut ? 'timeout' : 'network', attemptMs, message: fetchErr?.message || undefined });
         emitCartDebug('api-request-failed', {
           tag,
           attempt,
@@ -993,6 +1141,7 @@ async function postAddToCartApi(opts: {
       } catch { /* ignore */ }
 
       const delayMs = getAddToCartApiRetryDelayMs(attempt);
+      attemptLog.push({ attempt, reason: timedOut ? 'timeout' : 'network', attemptMs, message: fetchErr?.message || undefined });
       console.warn(`[${tag}] /api/add-to-cart retry ${attempt}/${ADD_TO_CART_API_MAX_ATTEMPTS} after ${timedOut ? 'timeout' : 'network error'}: ${fetchErr?.message || 'unknown'} (${attemptMs}ms)`);
       emitCartDebug('api-request-retry', {
         tag,
@@ -1011,11 +1160,17 @@ async function postAddToCartApi(opts: {
   }
 
   if (lastWasTimeout) {
-    throw new Error('Request timed out. Please check your connection and try again.');
+    const err: any = new Error('Request timed out. Please check your connection and try again.');
+    err.attemptLog = attemptLog;
+    err.failureKind = 'timeout';
+    throw err;
   }
 
   DEBUG() && console.warn(`[${tag}] /api/add-to-cart exhausted retries`, lastFetchErr?.message || lastFetchErr);
-  throw new Error('Network error. Please check your connection and try again.');
+  const err: any = new Error('Network error. Please check your connection and try again.');
+  err.attemptLog = attemptLog;
+  err.failureKind = 'network';
+  throw err;
 }
 
 function findTargetCartItem(cartData: any, variantId: number) {
@@ -2264,6 +2419,18 @@ export default function App({ productId, variantId }: AppProps = {}) {
     }
   }, []);
 
+  // Flush any cart failures buffered while offline (this session or a prior one
+  // on this device) once we have an API base — and again whenever the browser
+  // reports it's back online. See "Cart failure telemetry" in CLAUDE.md.
+  useEffect(() => {
+    const apiBase = (window as any).__chaseApiBase || '';
+    if (!apiBase) return;
+    void flushCartFailureReports(apiBase);
+    const onOnline = () => { void flushCartFailureReports(apiBase); };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, []);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -2569,6 +2736,11 @@ export default function App({ productId, variantId }: AppProps = {}) {
             let shouldResetSubmitting = true;
             const prematureCartGuard = startPrematureCartOpenGuard();
             resetThrottleTelemetry();
+            const requestId = newRequestId();
+            let failPhase = 'cart:building';
+            let failVariantId: string | number | null = null;
+            let failVariantReused: boolean | null = null;
+            let failServerMs: number | null = null;
             try {
               // Save BEFORE any async work — if the user navigates to /cart fast we still need
               // the config in sessionStorage when they come back. The duplicate call later in
@@ -2589,6 +2761,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 }));
 
               const payload = {
+                requestId,
                 width: config.width, length: config.length, vertical_skirt: config.vertical_skirt,
                 horizontal_skirt: config.horizontal_skirt, drip_edge: config.drip_edge,
                 material: config.material, mount: config.mount, lid_type: config.lid_type,
@@ -2624,6 +2797,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
               }
 
               // Step 1: Create variant (fast â€” no image in payload)
+              failPhase = 'cart:api';
               const { res, data, attempts: apiAttempts, totalMs: apiMs } = await postAddToCartApi({
                 apiBase,
                 payload,
@@ -2640,6 +2814,12 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 console.error('Add-to-cart API error:', res.status, data);
                 throw new Error(data?.error || `HTTP error! status: ${res.status}`);
               }
+
+              // Carry server result into the catch scope so a later-phase failure
+              // can record whether a variant was created (orphan detection).
+              failVariantId = data?.variantId ?? null;
+              failVariantReused = data?.variantReused ?? null;
+              failServerMs = data?._timing?.totalMs ?? null;
 
               DEBUG() && console.log(`[CART] â‘¡b Server result: variantId=${data.variantId}, reused=${data.variantReused}, propagated=${data.propagated}, price=${data.price}`);
 
@@ -2677,6 +2857,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 dom: collectCartDomSnapshot(),
               });
 
+              failPhase = 'cart:syncing';
               setSubmittingStep('cart:adding');
               const t1 = performance.now();
 
@@ -2791,9 +2972,16 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 dom: collectCartDomSnapshot(),
               });
 
-              // Check if image upload finished during the retry loop.
-              // Give it a short extra window (up to 1s) if it's nearly done.
-              const imageReady = await waitForPromiseWithin(imageUploadPromise, 1200);
+              // Check if image upload finished during the retry loop, and give
+              // it a longer pre-open window (up to 3s) so the drawer is more
+              // likely to open WITH the exact config screenshot already in place.
+              // For reused variants that already have an image, imageUploadPromise
+              // is an already-resolved Promise.resolve(null), so this resolves
+              // instantly — the 3s ceiling only applies to genuine new-variant /
+              // reuse-heal uploads. A permanent featured product image (set via
+              // the cleanup dashboard) still covers the gap if the upload outruns
+              // this window: the cart line shows that default image, not a blank.
+              const imageReady = await waitForPromiseWithin(imageUploadPromise, 3000);
               const imageUrl: string | null = imageReady.resolved ? imageReady.value : null;
               let seededImageSections: Record<string, string> | null = null;
               if (imageUrl && drawerSectionIds.length > 0) {
@@ -2832,6 +3020,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
               // instead of burning the ceiling, so the big budget is only ever
               // spent on genuine propagation lag, which always resolves. No
               // separate pre-fetch: the wait's first iteration fetches now.
+              failPhase = 'cart:opening';
               setSubmittingStep('cart:opening');
               const sectionReadiness = await waitForUsableRenderedSections({
                 sectionIds: drawerSectionIds,
@@ -3033,6 +3222,11 @@ export default function App({ productId, variantId }: AppProps = {}) {
               document.documentElement.style.overflow = '';
               document.body.classList.remove('overflow-hidden', 'no-scroll');
               document.documentElement.classList.remove('overflow-hidden', 'no-scroll');
+              recordCartFailure({
+                requestId, action: 'cart', phase: failPhase, err,
+                variantId: failVariantId, variantReused: failVariantReused,
+                serverTimingMs: failServerMs, config, apiBase,
+              });
               const msg = formatCheckoutErrorMessage(err?.message || 'Unknown error', 'cart');
               alert(msg.length > 200 ? msg.slice(0, 200) + '...' : msg);
             } finally {
@@ -3057,6 +3251,11 @@ export default function App({ productId, variantId }: AppProps = {}) {
             let shouldResetSubmitting = true;
             const prematureCartGuard = startPrematureCartOpenGuard();
             resetThrottleTelemetry();
+            const requestId = newRequestId();
+            let failPhase = 'buy:building';
+            let failVariantId: string | number | null = null;
+            let failVariantReused: boolean | null = null;
+            let failServerMs: number | null = null;
             try {
               // Save BEFORE any async work — Buy Now redirects to /checkout once cart is set;
               // if the user comes back, the configurator should still be on the same config.
@@ -3073,6 +3272,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
               const screenshotBase64Promise = captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true });
 
               const payload = {
+                requestId,
                 width: config.width, length: config.length, vertical_skirt: config.vertical_skirt,
                 horizontal_skirt: config.horizontal_skirt, drip_edge: config.drip_edge,
                 material: config.material, mount: config.mount, lid_type: config.lid_type,
@@ -3095,6 +3295,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 await loadPricingFromAPI(apiBase);
               }
 
+              failPhase = 'buy:api';
               const { res, data, attempts: buyApiAttempts, totalMs: buyApiMs } = await postAddToCartApi({
                 apiBase,
                 payload,
@@ -3104,6 +3305,11 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 console.error('Buy Now API error:', res.status, data);
                 throw new Error(data?.error || `HTTP error! status: ${res.status}`);
               }
+
+              // Carry server result into the catch scope (orphan detection).
+              failVariantId = data?.variantId ?? null;
+              failVariantReused = data?.variantReused ?? null;
+              failServerMs = data?._timing?.totalMs ?? null;
               if (data?._timing) {
                 const { authPricingMs, optionNameMs, variantMs, propagationMs, totalMs } = data._timing;
                 DEBUG() && console.log(`[BUY] API: ${buyApiMs}ms (${buyApiAttempts} attempt${buyApiAttempts > 1 ? 's' : ''}) | auth+pricing: ${authPricingMs}ms | optionName: ${optionNameMs}ms | variant: ${variantMs}ms | propagation: ${propagationMs ?? 0}ms | server total: ${totalMs}ms`);
@@ -3114,6 +3320,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
               DEBUG() && console.log(`[BUY] Server result: variantId=${data.variantId}, reused=${data.variantReused}, propagated=${data.propagated}, price=${data.price}`);
 
               // Step 2: Clear cart, add item, then verify price before checkout
+              failPhase = 'buy:syncing';
               setSubmittingStep('buy:adding');
               // Snapshot the customer's existing cart lines before the clear —
               // restored by restoreCartSnapshotIfNeeded() when they come back.
@@ -3189,6 +3396,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
 
               // Step 4: Go straight to checkout
               DEBUG() && console.log(`[BUY] âœ“ TOTAL: ${Math.round(performance.now() - tBuyTotal)}ms`);
+              failPhase = 'buy:redirecting';
               setSubmittingStep('buy:redirecting');
               saveConfigForRestore();
               shouldResetSubmitting = false;
@@ -3205,6 +3413,11 @@ export default function App({ productId, variantId }: AppProps = {}) {
 
             } catch (err: any) {
               console.error('Buy now error:', err);
+              recordCartFailure({
+                requestId, action: 'buy', phase: failPhase, err,
+                variantId: failVariantId, variantReused: failVariantReused,
+                serverTimingMs: failServerMs, config, apiBase,
+              });
               const msg = formatCheckoutErrorMessage(err?.message || 'Unknown error', 'buy');
               alert(msg.length > 220 ? msg.slice(0, 220) + '...' : msg);
             } finally {

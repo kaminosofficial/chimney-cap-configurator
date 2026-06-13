@@ -3,6 +3,7 @@ import { fetchPricingFromPublicSheet } from '../lib/pricing-sheet.js';
 import { getShopifyAccessToken, SHOPIFY_STORE, warnUnknownOrigin } from '../lib/shopify-auth.js';
 import { RAL_COLORS } from '../src/config/ralColors.js';
 import { computeCapPriceBreakdown } from '../src/utils/capPricing.js';
+import { appendCartLogRow } from '../lib/cart-log.js';
 
 const GOOGLE_SHEET_ID = (process.env.GOOGLE_SHEET_ID || '').trim();
 const SHOPIFY_PRODUCT_ID = (process.env.SHOPIFY_PRODUCT_ID || '').trim() || undefined;
@@ -41,6 +42,8 @@ interface CapOrderConfig {
     shopifyProductId?: string;
     shopifyVariantId?: string;
     image?: string;
+    /** Client-generated id, reused across retry attempts, for client↔server log correlation. */
+    requestId?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -364,7 +367,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
         const handlerStart = Date.now();
         const config: CapOrderConfig = req.body;
-        console.log('[CART] === Add-to-cart START ===', { productId: config.shopifyProductId, mount: config.mount, lid: config.lid_type });
+        const requestId = (config.requestId || (req.headers['x-request-id'] as string) || '').toString().slice(0, 64);
+        console.log('[CART] === Add-to-cart START ===', { requestId, productId: config.shopifyProductId, mount: config.mount, lid: config.lid_type });
 
         warnUnknownOrigin(req.headers.origin as string | undefined, 'CART');
 
@@ -463,10 +467,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Clamp matches the client cap (MAX_QTY = 10 in CartRow.tsx).
         const quantity = Math.max(1, Math.min(10, Math.round(config.quantity || 1)));
         const totalMs = Date.now() - handlerStart;
-        console.log('[CART] === DONE ===', totalMs, 'ms');
+        console.log('[CART] === DONE ===', { requestId }, totalMs, 'ms');
+
+        // Durable correlation row — ONLY on the new-variant-creation path (the slow
+        // path where the client's 30s abort happens; reused variants are instant).
+        // Pairing this with a client 'client-failure' row of the same requestId and
+        // variantIdObtained=false reveals an orphaned variant. Short timeout (1.5s)
+        // so this telemetry can't meaningfully extend an already-slow add.
+        if (!existingId) {
+            await appendCartLogRow({
+                type: 'server-variant-created',
+                requestId,
+                action: 'add-to-cart',
+                variantId,
+                serverTimingMs: totalMs,
+                device: (req.headers['user-agent'] as string) || null,
+                configSummary: {
+                    mount: config.mount, lid: config.lid_type,
+                    w: config.width, l: config.length,
+                    vs: config.vertical_skirt, hs: config.horizontal_skirt,
+                    mat: config.material, price: priceStr, hash,
+                },
+            }, 1500);
+        }
 
         return res.status(200).json({
             success: true,
+            requestId,
             variantId,
             variantReused: !!existingId,
             variantHasImage: existingId ? !!existingVariant?.image_id : false,
