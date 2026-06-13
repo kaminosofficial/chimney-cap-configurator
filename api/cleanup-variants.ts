@@ -794,8 +794,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             });
         }
 
+        // Action: re-pin the current featured image as a permanent, UNTIED position-1
+        // image so cleanup can never delete it (cleanup only removes images that are a
+        // deleted MFC- variant's image_id). No-op if the featured image is already
+        // untied. Lossless — Shopify copies from the existing CDN URL.
+        if (action === 'repin-featured') {
+            const prodRes = await fetch(
+                `https://${SHOPIFY_STORE}/admin/api/2025-10/products/${productId}.json?fields=id,image,images`,
+                { headers: { 'X-Shopify-Access-Token': accessToken } }
+            );
+            const prod = (await prodRes.json().catch(() => null))?.product;
+            const featured = prod?.image;
+            if (!featured?.src) {
+                return res.status(404).json({ error: 'Product has no featured image to re-pin.' });
+            }
+            const featuredFull = (prod.images || []).find((i: any) => i.id === featured.id);
+            const tied = !!(featuredFull?.variant_ids && featuredFull.variant_ids.length > 0);
+            if (!tied) {
+                return res.status(200).json({ success: true, action: 'already-protected', imageId: featured.id, src: featured.src });
+            }
+            // Featured image is a variant screenshot — copy it to a fresh untied slot at position 1.
+            const addRes = await fetch(
+                `https://${SHOPIFY_STORE}/admin/api/2025-10/products/${productId}/images.json`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': accessToken },
+                    body: JSON.stringify({ image: { src: featured.src, position: 1 } }),
+                }
+            );
+            const added = (await addRes.json().catch(() => null))?.image;
+            if (!added?.id) return res.status(502).json({ error: 'Failed to re-pin featured image' });
+            console.log('[CLEANUP] Re-pinned featured image', added.id, '(was tied to a variant)');
+            return res.status(200).json({ success: true, action: 're-pinned', wasTiedToVariant: tied, newImageId: added.id, src: added.src });
+        }
+
         // Unknown action
-        return res.status(400).json({ error: `Unknown action: ${action}. Use: ui, delete, cron, upload-product-image, anchor-preview, create-anchor` });
+        return res.status(400).json({ error: `Unknown action: ${action}. Use: ui, delete, cron, upload-product-image, anchor-preview, create-anchor, repin-featured` });
 
     } catch (err: any) {
         console.error('[CLEANUP] Error:', err?.stack || err);
