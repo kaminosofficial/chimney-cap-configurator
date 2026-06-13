@@ -642,8 +642,14 @@ function startPostOpenDrawerCatchUp(opts: {
   const token = ++drawerCatchUpToken;
   const startedAt = Date.now();
   const MAX_MS = 45000;
-  const INTERVAL_MS = 2000;
+  // First check soon after open (happy path costs nothing — the variant check
+  // below exits before any fetch); normal cadence afterwards; stretched when
+  // the storefront is rate-limiting us so we stop feeding the bot score.
+  const FIRST_TICK_MS = 700;
+  const INTERVAL_MS = 2500;
+  const THROTTLED_INTERVAL_MS = 5000;
   let attempts = 0;
+  let nextDelay = INTERVAL_MS;
 
   const tick = async () => {
     if (token !== drawerCatchUpToken) return; // superseded by a newer add
@@ -659,8 +665,14 @@ function startPostOpenDrawerCatchUp(opts: {
     attempts++;
     try {
       const fetched = await fetchRenderedSections(sectionIds, 'CART-CATCHUP');
+      if (isThrottleStatus(fetched.status)) {
+        nextDelay = THROTTLED_INTERVAL_MS;
+        noteStorefrontRateLimited('sections', fetched.status, 'CART-CATCHUP', attempts);
+      } else {
+        nextDelay = INTERVAL_MS;
+      }
       const selection = selectUsableRenderedSections(
-        fetched,
+        fetched.sections,
         { variantId, priceText: expectedPriceText },
         { requireVariant: true },
       );
@@ -680,10 +692,10 @@ function startPostOpenDrawerCatchUp(opts: {
       }
     } catch { /* transient — keep polling */ }
 
-    window.setTimeout(tick, INTERVAL_MS);
+    window.setTimeout(tick, nextDelay);
   };
 
-  window.setTimeout(tick, INTERVAL_MS);
+  window.setTimeout(tick, FIRST_TICK_MS);
 }
 
 function removeConfigurationOptionRows(root: ParentNode) {
@@ -844,15 +856,19 @@ function formatCheckoutErrorMessage(rawMessage: string, action: 'cart' | 'buy'):
   const actionLabel = action === 'cart' ? 'add this item to the cart' : 'start checkout';
 
   if (lower.includes('request timed out') || lower.includes('timed out')) {
-    return `This is taking longer than expected, so we couldnâ€™t ${actionLabel}. Please refresh the page and try again. If it keeps happening, please check your connection and try once more.`;
+    return `This is taking longer than expected, so we couldn't ${actionLabel}. Please refresh the page and try again. If it keeps happening, please check your connection and try once more.`;
   }
 
   if (lower.includes('network error') || lower.includes('failed to fetch') || lower.includes('load failed')) {
     return `We hit a network issue while trying to ${actionLabel}. Please refresh the page and try again. If the problem continues, please check your connection and try once more.`;
   }
 
+  if (lower.includes('already be in the cart')) {
+    return `Your item may already be in the cart. The store is busy right now — please open the cart page to check before trying again.`;
+  }
+
   if (lower.includes('too many') || lower.includes('rate limit') || lower.includes('429') || lower.includes('throttle')) {
-    return `The store is handling a lot of requests right now, so we couldn't ${actionLabel}. Please wait a few seconds and try again.`;
+    return `The store is busy right now, so we couldn't ${actionLabel}. Opening the store's cart page once, then returning here to try again, usually clears this.`;
   }
 
   if (lower.includes('shopify is still finalizing your price')) {
@@ -860,10 +876,10 @@ function formatCheckoutErrorMessage(rawMessage: string, action: 'cart' | 'buy'):
   }
 
   if (lower.includes('http error') || lower.includes('internal server error') || lower.includes('failed to create variant')) {
-    return `We couldnâ€™t ${actionLabel} right now. Please refresh the page and try again in a moment.`;
+    return `We couldn't ${actionLabel} right now. Please refresh the page and try again in a moment.`;
   }
 
-  return `${message || `We couldnâ€™t ${actionLabel} right now.`} Please refresh the page and try again.`;
+  return `${message || `We couldn't ${actionLabel} right now.`} Please refresh the page and try again.`;
 }
 
 const ADD_TO_CART_API_TIMEOUT_MS = 30000;
@@ -1042,7 +1058,22 @@ function selectPendingCartSections(
   return Object.keys(usable).some(isPrimaryCartSectionId) ? usable : null;
 }
 
-async function fetchCartState(tag: string): Promise<any | null> {
+/** Shopify bot protection answers 429 (rate limit) or 430 (security rejection). */
+function isThrottleStatus(status: number): boolean {
+  return status === 429 || status === 430;
+}
+
+// One telemetry post per add/buy flow (reset at flow entry) — a blocked IP
+// would otherwise spam /api/cart-debug with hundreds of events.
+let throttleTelemetrySent = false;
+function resetThrottleTelemetry() { throttleTelemetrySent = false; }
+function noteStorefrontRateLimited(endpoint: 'sections' | 'cart-js' | 'cart-add', status: number, tag: string, hits: number) {
+  if (throttleTelemetrySent) return;
+  throttleTelemetrySent = true;
+  emitCartDebug('storefront-rate-limited', { endpoint, status, tag, hits });
+}
+
+async function fetchCartState(tag: string): Promise<{ cart: any | null; status: number }> {
   try {
     const res = await fetch(
       buildShopifyPath('cart.js', { _: Date.now() }),
@@ -1050,17 +1081,17 @@ async function fetchCartState(tag: string): Promise<any | null> {
     );
     if (!res.ok) {
       console.warn(`[${tag}] Cart JSON fetch failed: HTTP ${res.status}`);
-      return null;
+      return { cart: null, status: res.status };
     }
-    return await res.json();
+    return { cart: await res.json(), status: res.status };
   } catch (e: any) {
     console.warn(`[${tag}] Cart JSON fetch error: ${e?.message}`);
-    return null;
+    return { cart: null, status: 0 };
   }
 }
 
-async function fetchRenderedSections(sectionIds: string[], tag: string): Promise<Record<string, string> | null> {
-  if (sectionIds.length === 0) return null;
+async function fetchRenderedSections(sectionIds: string[], tag: string): Promise<{ sections: Record<string, string> | null; status: number }> {
+  if (sectionIds.length === 0) return { sections: null, status: 0 };
 
   try {
     const url = new URL(getCurrentPageContextPath(), window.location.origin);
@@ -1072,14 +1103,17 @@ async function fetchRenderedSections(sectionIds: string[], tag: string): Promise
 
     const res = await fetch(requestPath, { cache: 'no-store' });
     if (!res.ok) {
+      // The status matters to callers: 429/430 means the storefront is
+      // rate-limiting us and further polling is pointless AND harmful
+      // (failed polls feed the bot score too).
       console.warn(`[${tag}] Section fetch failed: HTTP ${res.status}`);
-      return null;
+      return { sections: null, status: res.status };
     }
 
     const data = await res.json().catch(() => null);
     if (!data || typeof data !== 'object') {
       console.warn(`[${tag}] Section fetch returned non-JSON or empty response`);
-      return null;
+      return { sections: null, status: res.status };
     }
 
     const rendered: Record<string, string> = {};
@@ -1094,19 +1128,19 @@ async function fetchRenderedSections(sectionIds: string[], tag: string): Promise
 
     if (Object.keys(rendered).length === 0) {
       console.warn(`[${tag}] No rendered sections returned`);
-      return null;
+      return { sections: null, status: res.status };
     }
 
     DEBUG() && console.log(`[${tag}] Rendered sections fetched: ${Object.keys(rendered).join(', ')}`);
-    return rendered;
+    return { sections: rendered, status: res.status };
   } catch (e: any) {
     console.warn(`[${tag}] Section fetch error: ${e?.message}`);
-    return null;
+    return { sections: null, status: 0 };
   }
 }
 
 async function syncCartUiFromStorefront(tag: string) {
-  const cartData = await fetchCartState(tag);
+  const { cart: cartData } = await fetchCartState(tag);
   if (cartData) {
     updateCartBadgeCount(cartData.item_count ?? 0);
     dispatchCartSyncEvents(cartData);
@@ -1117,7 +1151,7 @@ async function syncCartUiFromStorefront(tag: string) {
     return cartData;
   }
 
-  const renderedSections = await fetchRenderedSections(sectionIds, tag);
+  const { sections: renderedSections } = await fetchRenderedSections(sectionIds, tag);
   const sectionSelection = selectUsableRenderedSections(renderedSections);
   if (sectionSelection.usableSections) {
     applySectionUpdatesPreservingCartUi(sectionSelection.usableSections, `${tag.toLowerCase()}-sync`);
@@ -1142,7 +1176,7 @@ const CART_SNAPSHOT_MAX_AGE_MS = 60 * 60 * 1000;
 
 async function saveCartSnapshotBeforeClear(tag: string): Promise<void> {
   try {
-    const cart = await fetchCartState(`${tag}-SNAPSHOT`);
+    const { cart } = await fetchCartState(`${tag}-SNAPSHOT`);
     const items = (Array.isArray(cart?.items) ? cart.items : [])
       .map((item: any) => ({
         id: Number(item.variant_id ?? item.id),
@@ -1170,7 +1204,7 @@ async function restoreCartSnapshotIfNeeded(): Promise<boolean> {
     const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
     if (items.length === 0 || Date.now() - (snapshot?.at || 0) > CART_SNAPSHOT_MAX_AGE_MS) return false;
 
-    const cart = await fetchCartState('CART-RESTORE');
+    const { cart } = await fetchCartState('CART-RESTORE');
     const inCart = new Set((cart?.items || []).map((item: any) => Number(item.variant_id ?? item.id)));
     const missing = items.filter((item: any) => !inCart.has(Number(item.id)));
     if (missing.length === 0) return false;
@@ -1185,8 +1219,10 @@ async function restoreCartSnapshotIfNeeded(): Promise<boolean> {
     let restoredCount = res.ok ? missing.length : 0;
     if (!res.ok) {
       // A batch add fails wholesale if one line is bad (e.g. sold out) —
-      // retry singly so the rest still come back.
+      // retry singly so the rest still come back. Spaced out: zero-gap bursts
+      // feed Shopify's per-IP bot score.
       for (const item of missing) {
+        await new Promise(r => setTimeout(r, 250));
         const single = await fetch(buildShopifyPath('cart/add.js'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1222,6 +1258,7 @@ async function waitForUsableRenderedSections(opts: {
   usableSections: Record<string, string> | null;
   rejectedSections: Record<string, any> | null;
   source: string | null;
+  rateLimited?: boolean;
 }> {
   const {
     sectionIds,
@@ -1229,7 +1266,7 @@ async function waitForUsableRenderedSections(opts: {
     expected,
     requirements,
     maxWaitMs,
-    delayMs = 1200,
+    delayMs = 1500,
     seedSections = [],
   } = opts;
 
@@ -1268,6 +1305,7 @@ async function waitForUsableRenderedSections(opts: {
 
   const start = Date.now();
   let attempt = 0;
+  let throttleStreak = 0;
 
   while (Date.now() - start < maxWaitMs) {
     if (attempt > 0) {
@@ -1275,8 +1313,28 @@ async function waitForUsableRenderedSections(opts: {
     }
     attempt++;
 
-    const fetchedSections = await fetchRenderedSections(sectionIds, tag);
-    const selection = selectUsableRenderedSections(fetchedSections, expected, requirements);
+    const fetched = await fetchRenderedSections(sectionIds, tag);
+
+    if (isThrottleStatus(fetched.status)) {
+      throttleStreak++;
+      if (throttleStreak >= 2) {
+        // The storefront is rate-limiting our section reads — further polling
+        // is pointless (we'd never get usable HTML) and harmful (failed polls
+        // feed the bot score). Bail and let the caller decide what to show.
+        console.warn(`[${tag}] Section fetches rate limited ${throttleStreak}x — bailing out early`);
+        noteStorefrontRateLimited('sections', fetched.status, tag, throttleStreak);
+        return {
+          usableSections: null,
+          rejectedSections: lastRejectedSections,
+          source: null,
+          rateLimited: true,
+        };
+      }
+    } else {
+      throttleStreak = 0;
+    }
+
+    const selection = selectUsableRenderedSections(fetched.sections, expected, requirements);
     if (selectionReady(selection.usableSections)) {
       return {
         usableSections: selection.usableSections,
@@ -1532,6 +1590,7 @@ async function addToCartWithRetry(opts: {
   const stepPrefix = tag === 'CART' ? 'cart' : 'buy';
   let attempts = 0;
   let rateLimitHits = 0;
+  let readThrottleHits = 0;
   let lastCartData: any = null;
   let lastSectionsHtml: Record<string, string> | null = null;
   let phase: 'adding' | 'confirm' | 'price-wait' = 'adding';
@@ -1583,6 +1642,7 @@ async function addToCartWithRetry(opts: {
             // every further attempt is wasted — exit early with an honest
             // "store is busy" failure instead of grinding the full budget.
             rateLimitHits++;
+            noteStorefrontRateLimited('cart-add', res.status, tag, rateLimitHits);
             if (rateLimitHits >= 3) {
               console.warn(`[${tag}] cart/add.js rate limited ${rateLimitHits}x — giving up early`);
               return {
@@ -1632,7 +1692,7 @@ async function addToCartWithRetry(opts: {
           };
         }
 
-        const confirmedCart = await fetchCartState(`${tag}-CONFIRM`);
+        const { cart: confirmedCart } = await fetchCartState(`${tag}-CONFIRM`);
         if (confirmedCart) {
           lastCartData = confirmedCart;
           const confirmedItem = findTargetCartItem(confirmedCart, variantId);
@@ -1651,7 +1711,7 @@ async function addToCartWithRetry(opts: {
           }
 
           const confirmedSections = sectionIds.length > 0
-            ? await fetchRenderedSections(sectionIds, `${tag}-SECTIONS-CONFIRM`)
+            ? (await fetchRenderedSections(sectionIds, `${tag}-SECTIONS-CONFIRM`)).sections
             : null;
           const usableConfirmedSections = selectPendingCartSections(confirmedSections, variantId, expectedPriceText);
           if (usableConfirmedSections) {
@@ -1684,15 +1744,42 @@ async function addToCartWithRetry(opts: {
       }
     }
 
-    const delay = phase === 'confirm' ? 1200 : 1500;
+    const delay = phase === 'confirm' ? 1500 : 2000;
     await new Promise(r => setTimeout(r, delay));
 
-    const cartData = await fetchCartState(tag);
+    const cartRead = await fetchCartState(tag);
+    const cartData = cartRead.cart;
     if (!cartData) {
+      if (isThrottleStatus(cartRead.status)) {
+        readThrottleHits++;
+        noteStorefrontRateLimited('cart-js', cartRead.status, tag, readThrottleHits);
+        if (readThrottleHits >= 3) {
+          // The add POST already returned 200 — the item is (very likely) in
+          // the cart; only our READS are being rate limited. Grinding the
+          // rest of the budget would end in a generic "try again" that
+          // invites a duplicate add.
+          console.warn(`[${tag}] cart.js reads rate limited ${readThrottleHits}x after successful add — exiting`);
+          return {
+            ok: false,
+            cartData: lastCartData,
+            priceVerified: false,
+            sectionsHtml: lastSectionsHtml,
+            error: 'Rate limited — your item may already be in the cart.',
+            hardFail: true,
+            rateLimited: true,
+            pendingPhase: phase,
+            attempts,
+            totalMs: Date.now() - start,
+          };
+        }
+      } else {
+        readThrottleHits = 0;
+      }
       DEBUG() && console.log(`[${tag}] cart.js unavailable while waiting in ${phase} (${elapsed}s)`);
       onStep?.(`${stepPrefix}:syncing`);
       continue;
     }
+    readThrottleHits = 0;
 
     lastCartData = cartData;
     const ourItem = findTargetCartItem(cartData, variantId);
@@ -1717,7 +1804,7 @@ async function addToCartWithRetry(opts: {
     }
 
     const pendingSections = sectionIds.length > 0
-      ? await fetchRenderedSections(sectionIds, `${tag}-SECTIONS-WAIT`)
+      ? (await fetchRenderedSections(sectionIds, `${tag}-SECTIONS-WAIT`)).sections
       : null;
     const usablePendingSections = selectPendingCartSections(pendingSections, variantId, expectedPriceText);
     if (usablePendingSections) {
@@ -1777,6 +1864,7 @@ async function continueCartPreparationUntilVerified(opts: {
   const stepPrefix = tag === 'CART' ? 'cart' : 'buy';
   let attempts = 0;
   let rateLimitHits = 0;
+  let readThrottleHits = 0;
   let phase: 'adding' | 'confirm' | 'price-wait' = pendingPhase;
   let lastCartData: any = null;
   let lastSectionsHtml: Record<string, string> | null = null;
@@ -1822,6 +1910,7 @@ async function continueCartPreparationUntilVerified(opts: {
             // This is the second-chance loop — the foreground budget already
             // tolerated throttling, so give up after 2 hits here.
             rateLimitHits++;
+            noteStorefrontRateLimited('cart-add', res.status, tag, rateLimitHits);
             if (rateLimitHits >= 2) {
               console.warn(`[${tag}] Pending add rate limited ${rateLimitHits}x — giving up early`);
               return {
@@ -1871,7 +1960,7 @@ async function continueCartPreparationUntilVerified(opts: {
           };
         }
 
-        const confirmedCart = await fetchCartState(`${tag}-PENDING-CONFIRM`);
+        const { cart: confirmedCart } = await fetchCartState(`${tag}-PENDING-CONFIRM`);
         if (confirmedCart) {
           lastCartData = confirmedCart;
           const confirmedItem = findTargetCartItem(confirmedCart, variantId);
@@ -1890,7 +1979,7 @@ async function continueCartPreparationUntilVerified(opts: {
           }
 
           const confirmedSections = sectionIds.length > 0
-            ? await fetchRenderedSections(sectionIds, `${tag}-PENDING-SECTIONS`)
+            ? (await fetchRenderedSections(sectionIds, `${tag}-PENDING-SECTIONS`)).sections
             : null;
           const usableConfirmedSections = selectPendingCartSections(confirmedSections, variantId, expectedPriceText);
           if (usableConfirmedSections) {
@@ -1921,13 +2010,36 @@ async function continueCartPreparationUntilVerified(opts: {
       }
     }
 
-    await new Promise(r => setTimeout(r, phase === 'confirm' ? 1200 : 1500));
+    await new Promise(r => setTimeout(r, phase === 'confirm' ? 1500 : 2000));
 
-    const cartData = await fetchCartState(tag);
+    const cartRead = await fetchCartState(tag);
+    const cartData = cartRead.cart;
     if (!cartData) {
+      if (isThrottleStatus(cartRead.status)) {
+        readThrottleHits++;
+        noteStorefrontRateLimited('cart-js', cartRead.status, tag, readThrottleHits);
+        if (readThrottleHits >= 3) {
+          console.warn(`[${tag}] cart.js reads rate limited ${readThrottleHits}x after successful add — exiting`);
+          return {
+            ok: false,
+            cartData: lastCartData,
+            priceVerified: false,
+            sectionsHtml: lastSectionsHtml,
+            error: 'Rate limited — your item may already be in the cart.',
+            hardFail: true,
+            rateLimited: true,
+            pendingPhase: phase,
+            attempts,
+            totalMs: Date.now() - start,
+          };
+        }
+      } else {
+        readThrottleHits = 0;
+      }
       onStep?.(`${stepPrefix}:syncing`);
       continue;
     }
+    readThrottleHits = 0;
 
     lastCartData = cartData;
     const ourItem = findTargetCartItem(cartData, variantId);
@@ -1952,7 +2064,7 @@ async function continueCartPreparationUntilVerified(opts: {
     }
 
     const pendingSections = sectionIds.length > 0
-      ? await fetchRenderedSections(sectionIds, `${tag}-PENDING-SECTIONS-WAIT`)
+      ? (await fetchRenderedSections(sectionIds, `${tag}-PENDING-SECTIONS-WAIT`)).sections
       : null;
     const usablePendingSections = selectPendingCartSections(pendingSections, variantId, expectedPriceText);
     if (usablePendingSections) {
@@ -2431,6 +2543,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
             submittingRef.current = true;
             let shouldResetSubmitting = true;
             const prematureCartGuard = startPrematureCartOpenGuard();
+            resetThrottleTelemetry();
             try {
               // Save BEFORE any async work — if the user navigates to /cart fast we still need
               // the config in sessionStorage when they come back. The duplicate call later in
@@ -2661,7 +2774,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
               if (imageUrl && drawerSectionIds.length > 0) {
                 DEBUG() && console.log('[IMG] Image ready before drawer open â€” fetching fresh sections with image...');
                 try {
-                  const imageSections = await fetchRenderedSections(drawerSectionIds, 'IMG');
+                  const { sections: imageSections } = await fetchRenderedSections(drawerSectionIds, 'IMG');
                   if (imageSections) {
                     seededImageSections = imageSections;
                     if (imageSections) {
@@ -2682,20 +2795,21 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 priceText: expectedPriceText,
                 imageUrl: expectedImageUrl,
               };
-              const verifiedSections = await fetchRenderedSections(drawerSectionIds, 'CART');
-              // 8s budget: prefer opening the drawer WITH the item already in it
-              // over opening fast-but-stale and having the catch-up loop pop it
-              // in afterwards (client found that jarring). Rendered sections
-              // typically lag /cart.js by 0.5–6s; the post-open catch-up loop
-              // remains the safety net for the rare longer tail.
+              // 12s budget: prefer opening the drawer WITH the item already in
+              // it over opening fast-but-stale and having the catch-up loop pop
+              // it in afterwards (client found that jarring). Rendered sections
+              // typically lag /cart.js by 0.5–6s; under storefront rate
+              // limiting the wait bails out after 2 throttled fetches instead
+              // of burning the ceiling (rateLimited: true). No separate
+              // pre-fetch: the wait's first iteration fetches immediately.
+              setSubmittingStep('cart:opening');
               const sectionReadiness = await waitForUsableRenderedSections({
                 sectionIds: drawerSectionIds,
                 tag: 'CART-SECTIONS',
                 expected: renderExpectation,
                 requirements: { requireVariant: true },
-                maxWaitMs: drawerSectionIds.length > 0 ? 8000 : 0,
+                maxWaitMs: drawerSectionIds.length > 0 ? 12000 : 0,
                 seedSections: [
-                  { source: 'verified-initial', sections: verifiedSections },
                   { source: 'bundled-initial', sections: finalRetryResult.sectionsHtml },
                   { source: 'image-initial', sections: seededImageSections },
                 ],
@@ -2726,7 +2840,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
               emitCartDebug('pre-open-sections', {
                 variantId: debugVariantId,
                 targetItem: summarizeCartItemForDebug(findTargetCartItem(finalCartData, debugVariantId)),
-                verifiedSections: summarizeSectionsForDebug(verifiedSections, renderExpectation),
+                verifiedSections: null,
                 bundledSections: summarizeSectionsForDebug(finalRetryResult.sectionsHtml, renderExpectation),
                 imageSections: summarizeSectionsForDebug(seededImageSections, renderExpectation),
                 usableSectionSource: sectionReadiness.source,
@@ -2735,7 +2849,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
               });
 
               if (!(typeof finalCartData?.item_count === 'number' && finalCartData.item_count > 0)) {
-                const confirmedCartData = await fetchCartState('CART-BADGE');
+                const { cart: confirmedCartData } = await fetchCartState('CART-BADGE');
                 if (confirmedCartData) {
                   finalCartData = confirmedCartData;
                 }
@@ -2760,10 +2874,26 @@ export default function App({ productId, variantId }: AppProps = {}) {
               // Save config so navigating away and coming back restores it
               saveConfigForRestore();
 
+              if (drawerSectionIds.length > 0 && !sectionReadiness.usableSections && sectionReadiness.rateLimited) {
+                // Storefront reads are rate limited: the drawer can't be
+                // filled now, and the catch-up loop uses the same blocked
+                // fetches. The add itself SUCCEEDED (price verified) — say so
+                // honestly instead of opening an empty drawer.
+                console.warn('[CART] Rendered sections rate limited — not opening the drawer');
+                emitCartDebug('drawer-open-skipped', {
+                  variantId: debugVariantId,
+                  reason: 'storefront-rate-limited',
+                  dom: collectCartDomSnapshot(),
+                });
+                prematureCartGuard.stop();
+                alert("Your item was added to the cart. The store is busy right now, so the cart preview can't open — use the cart icon or the cart page to view it.");
+                return;
+              }
+
               if (drawerSectionIds.length > 0 && !sectionReadiness.usableSections) {
-                // Drawer HTML still stale ($0 / item missing). Don't keep the user
-                // waiting on a spinner — open now and let the post-open catch-up
-                // loop inject the fresh drawer HTML the moment Shopify renders it.
+                // Drawer HTML still stale ($0 / item missing) but fetches are
+                // healthy — open now and let the post-open catch-up loop inject
+                // the fresh drawer HTML the moment Shopify renders it.
                 console.warn('[CART] Sections not ready pre-open — relying on post-open catch-up');
                 emitCartDebug('pre-open-sections-not-ready', {
                   variantId: debugVariantId,
@@ -2811,7 +2941,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
                   if (!url) return;
                   DEBUG() && console.log('[IMG] Upload finished after drawer opened â€” checking whether drawer needs image catch-up');
                   expectedImageUrl = url;
-                  const latestCartData = await fetchCartState('IMG');
+                  const { cart: latestCartData } = await fetchCartState('IMG');
                   if (latestCartData) {
                     const latestItem = findTargetCartItem(latestCartData, debugVariantId);
                     if (getCartItemPrice(latestItem) > 0) {
@@ -2835,7 +2965,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
                   });
 
                   if (!drawerHasExpectedImage && drawerSectionIds.length > 0) {
-                    const fetchedImageSections = await fetchRenderedSections(drawerSectionIds, 'IMG');
+                    const { sections: fetchedImageSections } = await fetchRenderedSections(drawerSectionIds, 'IMG');
                     const imageSectionSelection = selectUsableRenderedSections(
                       fetchedImageSections,
                       {
@@ -2896,6 +3026,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
             submittingRef.current = true;
             let shouldResetSubmitting = true;
             const prematureCartGuard = startPrematureCartOpenGuard();
+            resetThrottleTelemetry();
             try {
               // Save BEFORE any async work — Buy Now redirects to /checkout once cart is set;
               // if the user comes back, the configurator should still be on the same config.

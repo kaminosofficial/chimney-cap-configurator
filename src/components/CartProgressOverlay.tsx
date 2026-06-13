@@ -20,6 +20,7 @@ const CART_STEPS = [
   { key: 'building', label: 'Saving your configuration' },
   { key: 'adding', label: 'Creating your custom cap' },
   { key: 'syncing', label: 'Adding to your cart' },
+  { key: 'opening', label: 'Opening your cart' },
 ];
 
 const BUY_STEPS = [
