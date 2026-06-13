@@ -176,32 +176,53 @@ export async function generatePdf(element: HTMLElement | null): Promise<Blob | n
   }
 }
 
-// Delivers the generated PDF: on devices that support sharing files (iOS/Android)
-// this opens the native share sheet so the user can "Save to Files"; otherwise it
-// triggers a normal browser download.
+function isIOS(): boolean {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result || '').split(',')[1] || '');
+    fr.onerror = () => reject(fr.error || new Error('FileReader failed'));
+    fr.readAsDataURL(blob);
+  });
+}
+
+// Delivers the generated PDF with a DIRECT download. iPhone/Safari previews any
+// renderable file (PDFs included) inline and ignores Content-Disposition, so on
+// iOS we POST the PDF to /api/download-pdf, which returns it as
+// application/octet-stream + attachment — a type Safari can't render — and a
+// top-level form submit forces iOS's download manager → Save to Files (no inline
+// preview, no share sheet, no navigating away). Desktop/Android use the direct
+// blob download below, which already works there.
 export async function deliverPdf(blob: Blob, filename: string): Promise<void> {
-  const file =
-    typeof File !== 'undefined'
-      ? new File([blob], filename, { type: 'application/pdf' })
-      : null;
-
-  const nav = navigator as Navigator & {
-    canShare?: (data?: ShareData) => boolean;
-    share?: (data?: ShareData) => Promise<void>;
-  };
-
-  const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-
-  if (isMobile && file && nav.canShare && nav.canShare({ files: [file] }) && nav.share) {
+  if (isIOS()) {
     try {
-      await nav.share({ files: [file], title: filename });
+      const base64 = await blobToBase64(blob);
+      const apiBase = (window as any).__chaseApiBase || '';
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = `${apiBase}/api/download-pdf`;
+      form.style.display = 'none';
+      const add = (name: string, value: string) => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+      };
+      add('filename', filename);
+      add('data', base64);
+      document.body.appendChild(form);
+      form.submit();
+      setTimeout(() => { try { document.body.removeChild(form); } catch { /* already gone */ } }, 1500);
       return;
-    } catch (e) {
-      // User cancelled, or share was blocked — fall through to download/open.
-      if ((e as DOMException)?.name === 'AbortError') return;
+    } catch {
+      // Fall through to the blob download.
     }
   }
-
   triggerDownload(blob, filename);
 }
 
@@ -211,9 +232,13 @@ function triggerDownload(blob: Blob, filename: string): void {
   a.href = url;
   a.download = filename;
   a.rel = 'noopener';
+  // No target="_blank" — on iOS that opens the PDF inline instead of downloading.
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
-  // Give the browser a moment to start the download before revoking.
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  // Keep the anchor AND the object URL alive briefly — iOS aborts the download if
+  // they're removed/revoked too soon after click().
+  setTimeout(() => {
+    try { document.body.removeChild(a); } catch { /* already detached */ }
+    URL.revokeObjectURL(url);
+  }, 4000);
 }
