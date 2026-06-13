@@ -1,4 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { fetchPricingFromPublicSheet } from '../lib/pricing-sheet.js';
+import { computeCapPriceBreakdown } from '../src/utils/capPricing.js';
 
 const SHOPIFY_STORE = (process.env.SHOPIFY_STORE || '').trim();
 const SHOPIFY_ACCESS_TOKEN = (process.env.SHOPIFY_ACCESS_TOKEN || '').trim() || undefined;
@@ -6,8 +8,14 @@ const SHOPIFY_CLIENT_ID = (process.env.SHOPIFY_CLIENT_ID || '').trim() || undefi
 const SHOPIFY_CLIENT_SECRET = (process.env.SHOPIFY_CLIENT_SECRET || '').trim() || undefined;
 const SHOPIFY_PRODUCT_ID = (process.env.SHOPIFY_PRODUCT_ID || '').trim() || undefined;
 const CRON_SECRET = (process.env.CRON_SECRET || 'kaminos').trim();
+const GOOGLE_SHEET_ID = (process.env.GOOGLE_SHEET_ID || '').trim();
 
 const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
+
+// Protected (non-MFC-) variant that pins the product's "from $X" to the true
+// lowest configurable price. The non-MFC- option value means cleanup never
+// touches it (cleanup only deletes option1 values starting with "MFC-").
+const ANCHOR_OPTION_LABEL = 'Starting Price';
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -82,14 +90,18 @@ async function deleteVariant(productId: string, variantId: string, accessToken: 
 }
 
 async function uploadProductImage(productId: string, accessToken: string, base64: string): Promise<{ imageUrl: string; imageId: number }> {
+    // Detect type from the data-URL prefix (the dashboard now sends a resized JPEG).
+    const isJpeg = base64.startsWith('data:image/jpeg');
+    const mimeType = isJpeg ? 'image/jpeg' : 'image/png';
+    const ext = isJpeg ? 'jpg' : 'png';
     const buffer = Buffer.from(base64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-    const filename = `chimney-cap-default-${Date.now()}.png`;
+    const filename = `chimney-cap-default-${Date.now()}.${ext}`;
 
     // Stage the upload
     const stageRes = await fetch(`https://${SHOPIFY_STORE}/admin/api/2025-10/graphql.json`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': accessToken },
-        body: JSON.stringify({ query: `mutation { stagedUploadsCreate(input: [{ resource: PRODUCT_IMAGE filename: "${filename}" mimeType: "image/png" httpMethod: PUT }]) { stagedTargets { url resourceUrl } userErrors { field message } } }` }),
+        body: JSON.stringify({ query: `mutation { stagedUploadsCreate(input: [{ resource: PRODUCT_IMAGE filename: "${filename}" mimeType: "${mimeType}" httpMethod: PUT }]) { stagedTargets { url resourceUrl } userErrors { field message } } }` }),
     });
     const stageData = await stageRes.json();
     const target = stageData?.data?.stagedUploadsCreate?.stagedTargets?.[0];
@@ -98,7 +110,7 @@ async function uploadProductImage(productId: string, accessToken: string, base64
     // Upload binary
     const putRes = await fetch(target.url, {
         method: 'PUT',
-        headers: { 'Content-Type': 'image/png' },
+        headers: { 'Content-Type': mimeType },
         body: buffer,
     });
     if (!putRes.ok) throw new Error(`Binary upload failed: ${putRes.status}`);
@@ -126,6 +138,73 @@ async function uploadProductImage(productId: string, accessToken: string, base64
     );
 
     return { imageUrl: imgData.image.src, imageId: imgData.image.id };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Anchor variant (pins the "from $X" floor price)                    */
+/* ------------------------------------------------------------------ */
+
+// Cheapest configurable cap, computed from the LIVE sheet: smallest dims with no
+// surcharges, iterating mount/lid/material to find the lowest valid total. The
+// cap has no gauge/holes/skirt-threshold like the chase cover — its price is a
+// mount×lid bracket multiplier, so we search the combinations directly.
+const CAP_FLOOR_BASE = { width: 10, length: 10, screen_height: 4, lid_pitch: 1, vertical_skirt: 1, powder_coat: false };
+const CAP_MOUNTS = ['skirt', 'pitched_skirt', 'top_mount'];
+const CAP_LIDS = ['flat', 'hip', 'hip_ridge', 'standing_seam'];
+
+async function computeFloorPrice(): Promise<{ price: string; config: any } | null> {
+    const pricing: any = await fetchPricingFromPublicSheet(GOOGLE_SHEET_ID, 'pricing');
+    if (!pricing || !pricing.CAP_MULTIPLIERS) return null;
+    const materials = Object.keys(pricing.MATERIAL_MULT || { stainless: 1 });
+    let best = Infinity;
+    let bestConfig: any = null;
+    for (const mount of CAP_MOUNTS) {
+        for (const lid_type of CAP_LIDS) {
+            for (const material of materials) {
+                const cfg = { ...CAP_FLOOR_BASE, mount, lid_type, material };
+                const bd = computeCapPriceBreakdown(cfg, pricing);
+                // Only trust combos backed by a real sheet multiplier — a missing key
+                // falls back to ×1 and would yield an absurdly low, fake floor.
+                if (!bd.multiplierFromSheet) continue;
+                if (!(pricing.MARGIN_RATE > 0)) continue;
+                if (bd.total > 0 && bd.total < best) {
+                    best = bd.total;
+                    bestConfig = { ...cfg, multiplierKey: bd.multiplierKey, total: Number(bd.total.toFixed(2)) };
+                }
+            }
+        }
+    }
+    if (!Number.isFinite(best) || best <= 0) return null;
+    return { price: best.toFixed(2), config: bestConfig };
+}
+
+// Create the protected anchor variant via REST (non-MFC- option value, untracked,
+// oversell-allowed). Cleanup skips it permanently.
+async function createAnchorVariant(
+    productId: string,
+    accessToken: string,
+    price: string
+): Promise<{ ok: boolean; variantId?: string; error?: string }> {
+    const res = await fetch(
+        `https://${SHOPIFY_STORE}/admin/api/2025-10/products/${productId}/variants.json`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': accessToken },
+            body: JSON.stringify({
+                variant: {
+                    option1: ANCHOR_OPTION_LABEL,
+                    price,
+                    inventory_policy: 'continue',
+                    inventory_management: null,
+                },
+            }),
+        }
+    );
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.variant?.id) {
+        return { ok: false, error: data?.errors ? JSON.stringify(data.errors) : `HTTP ${res.status}` };
+    }
+    return { ok: true, variantId: String(data.variant.id) };
 }
 
 /* ------------------------------------------------------------------ */
@@ -479,19 +558,39 @@ document.getElementById('img-file').addEventListener('change', (e) => {
   reader.readAsDataURL(file);
 });
 
+// Downscale on a canvas (white background, max 1600px, JPEG) BEFORE upload so a
+// full-resolution photo never exceeds Vercel's ~4.5MB request-body limit.
+function resizeToDataUrl(file, maxDim, cb) {
+  var img = new Image();
+  var objUrl = URL.createObjectURL(file);
+  img.onload = function () {
+    URL.revokeObjectURL(objUrl);
+    var scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+    var w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+    var canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    cb(canvas.toDataURL('image/jpeg', 0.9));
+  };
+  img.onerror = function () { cb(null); };
+  img.src = objUrl;
+}
 document.getElementById('upload-img-btn').addEventListener('click', async () => {
   const file = document.getElementById('img-file').files[0];
   if (!file) return;
   if (!ensureSecret()) return;
-  document.getElementById('upload-img-btn').disabled = true;
-  showStatus('Uploading featured image...', 'info');
-  const reader = new FileReader();
-  reader.onload = async (ev) => {
+  const btn = document.getElementById('upload-img-btn');
+  btn.disabled = true;
+  showStatus('Resizing & uploading featured image...', 'info');
+  resizeToDataUrl(file, 1600, async (dataUrl) => {
+    if (!dataUrl) { showStatus('Could not read that image file.', 'error'); btn.disabled = false; return; }
     try {
       const res = await fetch(API_URL + '?secret=' + encodeURIComponent(SECRET) + '&action=upload-product-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: ev.target.result }),
+        body: JSON.stringify({ image: dataUrl }),
       });
       const data = await res.json();
       if (data.success) {
@@ -502,10 +601,9 @@ document.getElementById('upload-img-btn').addEventListener('click', async () => 
     } catch (err) {
       showStatus('Error: ' + err.message, 'error');
     } finally {
-      document.getElementById('upload-img-btn').disabled = false;
+      btn.disabled = false;
     }
-  };
-  reader.readAsDataURL(file);
+  });
 });
 
 document.getElementById('run-cron').addEventListener('click', async () => {
@@ -636,6 +734,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
             const { image } = req.body || {};
             if (!image) return res.status(400).json({ error: 'Missing image (base64)' });
+            // Vercel serverless caps request bodies at ~4.5MB. The dashboard now
+            // auto-resizes before sending, so this is just a clear fallback message.
+            if (typeof image === 'string' && image.length > 4_000_000) {
+                const mb = (image.length * 0.75 / 1024 / 1024).toFixed(1);
+                return res.status(413).json({ error: `Image too large (~${mb}MB). The dashboard auto-resizes before upload — re-select the file and try again.` });
+            }
             try {
                 const result = await uploadProductImage(productId, accessToken, image);
                 console.log('[CLEANUP] Default product image uploaded:', result.imageUrl);
@@ -645,8 +749,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }
         }
 
+        // Action: preview the computed floor price (read-only, creates nothing)
+        if (action === 'anchor-preview') {
+            const floor = await computeFloorPrice();
+            if (!floor) return res.status(500).json({ error: 'Could not compute floor price (check GOOGLE_SHEET_ID / pricing)' });
+            const existing = variants.find((v: any) => String(v.option1 || '') === ANCHOR_OPTION_LABEL);
+            return res.status(200).json({
+                success: true,
+                floorPrice: floor.price,
+                config: floor.config,
+                anchorExists: !!existing,
+                anchorVariantId: existing ? String(existing.id) : null,
+                anchorCurrentPrice: existing ? existing.price : null,
+            });
+        }
+
+        // Action: create (or re-price) the protected anchor variant at the floor price
+        if (action === 'create-anchor') {
+            const floor = await computeFloorPrice();
+            if (!floor) return res.status(500).json({ error: 'Could not compute floor price (check GOOGLE_SHEET_ID / pricing)' });
+
+            const existing = variants.find((v: any) => String(v.option1 || '') === ANCHOR_OPTION_LABEL);
+            if (existing) {
+                const upd = await fetch(
+                    `https://${SHOPIFY_STORE}/admin/api/2025-10/products/${productId}/variants/${existing.id}.json`,
+                    {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': accessToken },
+                        body: JSON.stringify({ variant: { id: existing.id, price: floor.price } }),
+                    }
+                );
+                const updData = await upd.json().catch(() => null);
+                return res.status(upd.ok ? 200 : 502).json({
+                    success: upd.ok, action: 'repriced', variantId: String(existing.id), floorPrice: floor.price,
+                    error: upd.ok ? undefined : JSON.stringify(updData?.errors || `HTTP ${upd.status}`),
+                });
+            }
+
+            const created = await createAnchorVariant(productId, accessToken, floor.price);
+            console.log('[CLEANUP] Anchor variant', created.ok ? `created ${created.variantId}` : `failed: ${created.error}`, 'at', floor.price);
+            return res.status(created.ok ? 200 : 502).json({
+                success: created.ok, action: 'created', variantId: created.variantId,
+                floorPrice: floor.price, optionLabel: ANCHOR_OPTION_LABEL, error: created.error,
+            });
+        }
+
         // Unknown action
-        return res.status(400).json({ error: `Unknown action: ${action}. Use: ui, delete, cron, upload-product-image` });
+        return res.status(400).json({ error: `Unknown action: ${action}. Use: ui, delete, cron, upload-product-image, anchor-preview, create-anchor` });
 
     } catch (err: any) {
         console.error('[CLEANUP] Error:', err?.stack || err);
