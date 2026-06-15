@@ -3075,16 +3075,17 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 dom: collectCartDomSnapshot(),
               });
 
-              // Check if image upload finished during the retry loop, and give
-              // it a longer pre-open window (up to 3s) so the drawer is more
-              // likely to open WITH the exact config screenshot already in place.
-              // For reused variants that already have an image, imageUploadPromise
-              // is an already-resolved Promise.resolve(null), so this resolves
-              // instantly — the 3s ceiling only applies to genuine new-variant /
-              // reuse-heal uploads. A permanent featured product image (set via
-              // the cleanup dashboard) still covers the gap if the upload outruns
-              // this window: the cart line shows that default image, not a blank.
-              const imageReady = await waitForPromiseWithin(imageUploadPromise, 3000);
+              // Wait for the image upload to finish before opening, so the drawer
+              // opens WITH the configured screenshot instead of the default photo.
+              // This is a CEILING, not a fixed delay — it resolves the instant the
+              // upload completes. Mobile gets a longer ceiling (7s) because the
+              // staged upload + attach over a slow link routinely outruns a 3s
+              // window; when it did, we used to skip the image wait entirely and
+              // open with the default (the "no image for 3-4s" the client saw).
+              // For reused variants imageUploadPromise is Promise.resolve(null), so
+              // this resolves instantly. If the upload genuinely outruns the ceiling,
+              // we still open (default photo) and the post-open refresh swaps it in.
+              const imageReady = await waitForPromiseWithin(imageUploadPromise, isMobile() ? 7000 : 3000);
               const imageUrl: string | null = imageReady.resolved ? imageReady.value : null;
               let seededImageSections: Record<string, string> | null = null;
               if (imageUrl && drawerSectionIds.length > 0) {
@@ -3187,10 +3188,10 @@ export default function App({ productId, variantId }: AppProps = {}) {
                   tag: 'CART-IMG-SECTIONS',
                   expected: renderExpectation,
                   requirements: { requireVariant: true, requireImage: true },
-                  // Mobile's lazy drawer can't be pre-filled, so give it a slightly
-                  // longer ceiling to land the image before open (user accepted the
-                  // small extra wait to avoid the default-photo flash).
-                  maxWaitMs: isMobile() ? 5000 : 4000,
+                  // Wait for the image to land in the rendered section before open
+                  // (user accepted the small extra wait to avoid the default-photo
+                  // flash). Mobile gets more room for Shopify's render propagation.
+                  maxWaitMs: isMobile() ? 6000 : 4000,
                   seedSections: [
                     { source: 'image-preopen-seed', sections: sectionReadiness.usableSections },
                   ],
