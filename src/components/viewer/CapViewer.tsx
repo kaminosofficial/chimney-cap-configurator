@@ -69,7 +69,7 @@ export function CapViewer() {
       <Canvas
         shadows
         gl={{ preserveDrawingBuffer: true }}
-        camera={{ position: [1.25, 1.0, 1.25], fov: 45 }}
+        camera={{ position: [1.25, 1.0, 1.25], fov: 45, near: 0.05, far: 100 }}
         style={{ width: '100%', height: '100%', display: 'block' }}
       >
         <OrbitControls enabled={orbitEnabled} target={[0, 0.12, 0]} makeDefault minDistance={0.5} maxDistance={6.0} />
