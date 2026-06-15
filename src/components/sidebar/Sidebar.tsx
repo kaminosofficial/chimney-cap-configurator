@@ -13,9 +13,11 @@ interface SidebarProps {
   isSubmitting?: boolean;
   submittingAction?: 'cart' | 'buy' | null;
   submittingStep?: string;
+  submitError?: { action: 'cart' | 'buy'; message: string } | null;
+  onDismissError?: () => void;
 }
 
-export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, onExportPdf, isSubmitting = false, submittingAction = null, submittingStep = '' }: SidebarProps) {
+export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, onExportPdf, isSubmitting = false, submittingAction = null, submittingStep = '', submitError = null, onDismissError }: SidebarProps) {
   const config = useConfigStore();
 
   return (
@@ -127,7 +129,7 @@ export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, onExportPdf, isSubmi
             </button>
           )}
         </div>
-        <CartRow onAddToCart={onAddToCart} onBuyNow={onBuyNow} isSubmitting={isSubmitting} submittingAction={submittingAction} submittingStep={submittingStep} />
+        <CartRow onAddToCart={onAddToCart} onBuyNow={onBuyNow} isSubmitting={isSubmitting} submittingAction={submittingAction} submittingStep={submittingStep} submitError={submitError} onDismissError={onDismissError} />
       </div>
     </div>
   );

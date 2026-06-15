@@ -7,6 +7,11 @@ interface Props {
   isSubmitting?: boolean;
   submittingAction?: 'cart' | 'buy' | null;
   submittingStep?: string;
+  // Set when an add/buy terminally failed (e.g. a connection drop). Drives the
+  // "tap to retry" banner instead of a dead-end alert — the server is idempotent,
+  // so retrying re-sends the same config and reuses any variant already created.
+  submitError?: { action: 'cart' | 'buy'; message: string } | null;
+  onDismissError?: () => void;
 }
 
 const MAX_QTY = 10;
@@ -48,7 +53,7 @@ function getBuyLabel(step: string): string {
   return 'Processing...';
 }
 
-export function CartRow({ onAddToCart, onBuyNow, isSubmitting = false, submittingAction = null, submittingStep = '' }: Props) {
+export function CartRow({ onAddToCart, onBuyNow, isSubmitting = false, submittingAction = null, submittingStep = '', submitError = null, onDismissError }: Props) {
   const quantity = useConfigStore(s => s.quantity);
   const price = useConfigStore(s => s.price);
   const set = useConfigStore(s => s.set);
@@ -86,6 +91,53 @@ export function CartRow({ onAddToCart, onBuyNow, isSubmitting = false, submittin
 
   return (
     <>
+      {submitError && !isSubmitting && (
+        <div
+          role="alert"
+          style={{
+            background: '#FCF3E7',
+            border: '1px solid #E6CC9C',
+            borderRadius: '8px',
+            padding: '12px 14px',
+            marginBottom: '12px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '10px',
+          }}
+        >
+          <div style={{ fontSize: '13px', lineHeight: 1.45, color: '#6B4F1E' }}>
+            {submitError.message}
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button
+              type="button"
+              onClick={() => {
+                const action = submitError.action;
+                onDismissError?.();
+                if (action === 'cart') onAddToCart();
+                else onBuyNow();
+              }}
+              style={{
+                background: '#C9A870', color: '#fff', border: 'none', borderRadius: '6px',
+                padding: '9px 18px', fontWeight: 600, fontSize: '13px', cursor: 'pointer',
+              }}
+            >
+              Try again
+            </button>
+            <button
+              type="button"
+              onClick={() => onDismissError?.()}
+              style={{
+                background: 'transparent', color: '#6B4F1E', border: '1px solid #E6CC9C',
+                borderRadius: '6px', padding: '9px 14px', fontSize: '13px', cursor: 'pointer',
+              }}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="cart-row">
         {/* Quantity selector — matches Shopify Dawn theme style */}
         <div className="qty-selector">

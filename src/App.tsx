@@ -2432,8 +2432,18 @@ export default function App({ productId, variantId }: AppProps = {}) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittingAction, setSubmittingAction] = useState<'cart' | 'buy' | null>(null);
   const [submittingStep, setSubmittingStep] = useState<string>('');
+  // Terminal add/buy failure (e.g. a connection drop) → drives the "tap to retry"
+  // banner in CartRow instead of a dead-end alert. The server is idempotent, so
+  // retrying re-sends the same config and reuses any variant already created.
+  const [submitError, setSubmitError] = useState<{ action: 'cart' | 'buy'; message: string } | null>(null);
   // Synchronous guard against double-taps â€” React state can be stale across rapid clicks
   const submittingRef = useRef(false);
+
+  // Clear the retry banner the moment a new add/buy starts (manual tap or "Try
+  // again"), so a stale error never lingers over a fresh attempt or a success.
+  useEffect(() => {
+    if (isSubmitting) setSubmitError(null);
+  }, [isSubmitting]);
 
   const arViewerRef = useRef<any>(null);
   const qrCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -2827,6 +2837,8 @@ export default function App({ productId, variantId }: AppProps = {}) {
           isSubmitting={isSubmitting}
           submittingAction={submittingAction}
           submittingStep={submittingStep}
+          submitError={submitError}
+          onDismissError={() => setSubmitError(null)}
           onAddToCart={async () => {
             if (isSubmitting || submittingRef.current) return;
             const apiBase = (window as any).__chaseApiBase || '';
@@ -3375,7 +3387,8 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 serverTimingMs: failServerMs, config, apiBase,
               });
               const msg = formatCheckoutErrorMessage(err?.message || 'Unknown error', 'cart');
-              alert(msg.length > 200 ? msg.slice(0, 200) + '...' : msg);
+              // Not a dead-end: show the "tap to retry" banner (server is idempotent).
+              setSubmitError({ action: 'cart', message: msg.length > 200 ? msg.slice(0, 200) + '...' : msg });
             } finally {
               prematureCartGuard.stop();
               submittingRef.current = false;
@@ -3566,7 +3579,8 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 serverTimingMs: failServerMs, config, apiBase,
               });
               const msg = formatCheckoutErrorMessage(err?.message || 'Unknown error', 'buy');
-              alert(msg.length > 220 ? msg.slice(0, 220) + '...' : msg);
+              // Not a dead-end: show the "tap to retry" banner (server is idempotent).
+              setSubmitError({ action: 'buy', message: msg.length > 220 ? msg.slice(0, 220) + '...' : msg });
             } finally {
               prematureCartGuard.stop();
               submittingRef.current = false;
