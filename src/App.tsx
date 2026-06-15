@@ -1643,16 +1643,15 @@ async function captureCanvasScreenshot(
 ): Promise<string | undefined> {
   try {
     if (options?.resetView) {
-      if (options?.framed) {
-        // PDF only: save the user's camera, frame to the bounding box for a
-        // consistent size, and restore the live camera afterwards (in finally).
-        cameraActions.snapshot();
-        cameraActions.fitView();
-      } else {
-        // Cart/buy: the light, last-night reset view — no bounding-box math,
-        // nothing to restore. Keeps the per-add work minimal on mobile.
-        cameraActions.reset();
-      }
+      // Frame the camera to the product's bounding box so the WHOLE product fits
+      // in the snapshot at a consistent size, regardless of dimensions. This is
+      // the light fix for big products getting cut off — just a camera move, no
+      // per-pixel cropping. Because it fits the round bounding sphere to the
+      // SHORTER screen dimension, the product also lands inside the centered
+      // square Shopify shows for the cart tile, so no pad/crop is needed.
+      // snapshot()/restore() put the user's live camera back afterwards.
+      cameraActions.snapshot();
+      cameraActions.fitView();
       // Let OrbitControls and the canvas render settle before grabbing the image.
       await waitForNextFrame();
       await waitForNextFrame();
@@ -1696,9 +1695,8 @@ async function captureCanvasScreenshot(
   } catch {
     return undefined;
   } finally {
-    // Put the live camera back where the user had it (only the PDF path moved it
-    // via fitView; the cart/buy reset() path matches last night's behavior).
-    if (options?.resetView && options?.framed) cameraActions.restore();
+    // Put the live camera back where the user had it (the capture used fitView).
+    if (options?.resetView) cameraActions.restore();
   }
 }
 
