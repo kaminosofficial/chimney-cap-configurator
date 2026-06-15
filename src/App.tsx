@@ -1603,30 +1603,6 @@ function cropCanvasToContent(src: HTMLCanvasElement, padFrac = 0.05): HTMLCanvas
   }
 }
 
-// Expands a canvas to a centered SQUARE on white (no scaling). Used for the cart
-// thumbnail: Shopify cover-crops the variant image into a square tile, so a wide
-// (tightly-cropped) image would lose its sides. Padding the model to a square
-// first means the whole product stays visible and every variant frames the same.
-function padCanvasToSquare(src: HTMLCanvasElement): HTMLCanvasElement {
-  try {
-    const w = src.width;
-    const h = src.height;
-    if (!w || !h || w === h) return src;
-    const side = Math.max(w, h);
-    const out = document.createElement('canvas');
-    out.width = side;
-    out.height = side;
-    const ctx = out.getContext('2d');
-    if (!ctx) return src;
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, side, side);
-    ctx.drawImage(src, Math.round((side - w) / 2), Math.round((side - h) / 2));
-    return out;
-  } catch {
-    return src;
-  }
-}
-
 // Encodes a canvas to a JPEG data URL guaranteed under the variant-image upload
 // limit (~525KB / ~700k base64 chars): first downscale very large captures (a
 // high-DPR 3D canvas can be 1600px+), then step quality down if still over.
@@ -1663,16 +1639,20 @@ function canvasToJpegUnderLimit(src: HTMLCanvasElement, maxBase64 = 680000): str
 
 async function captureCanvasScreenshot(
   appLayoutRef: React.RefObject<HTMLDivElement | null>,
-  options?: { resetView?: boolean; hideLabels?: boolean; square?: boolean }
+  options?: { resetView?: boolean; hideLabels?: boolean; framed?: boolean }
 ): Promise<string | undefined> {
   try {
     if (options?.resetView) {
-      // Save the user's current camera so it can be restored after the capture —
-      // otherwise the live viewer is left "stuck" at the fit pose after export.
-      cameraActions.snapshot();
-      // Frame the camera to the product's bounding box so it's a consistent size
-      // and fully visible in every capture (cart image + PDF), regardless of dims.
-      cameraActions.fitView();
+      if (options?.framed) {
+        // PDF only: save the user's camera, frame to the bounding box for a
+        // consistent size, and restore the live camera afterwards (in finally).
+        cameraActions.snapshot();
+        cameraActions.fitView();
+      } else {
+        // Cart/buy: the light, last-night reset view — no bounding-box math,
+        // nothing to restore. Keeps the per-add work minimal on mobile.
+        cameraActions.reset();
+      }
       // Let OrbitControls and the canvas render settle before grabbing the image.
       await waitForNextFrame();
       await waitForNextFrame();
@@ -1698,11 +1678,11 @@ async function captureCanvasScreenshot(
         ctx2d.fillStyle = '#ffffff';
         ctx2d.fillRect(0, 0, tmp.width, tmp.height);
         ctx2d.drawImage(canvasEl, 0, 0);
-        // Trim the empty white border so the product fills the frame (cart + PDF).
-        let outCanvas = cropCanvasToContent(tmp);
-        // Cart thumbnail (square): pad to a square so Shopify's cover-cropped
-        // square tile shows the WHOLE model; the PDF keeps the tight crop.
-        if (options?.square) outCanvas = padCanvasToSquare(outCanvas);
+        // PDF only: trim the white border so the hero fills the frame. The cart/buy
+        // capture stays LIGHT — no full-canvas getImageData scan — so rapid adds on
+        // a phone don't build up memory pressure. The size guard still bounds the
+        // upload size (and prevents the 413 that left a variant imageless).
+        const outCanvas = options?.framed ? cropCanvasToContent(tmp) : tmp;
         result = canvasToJpegUnderLimit(outCanvas);
       } else {
         result = canvasEl.toDataURL('image/jpeg', 0.85);
@@ -1716,8 +1696,9 @@ async function captureCanvasScreenshot(
   } catch {
     return undefined;
   } finally {
-    // Put the live camera back where the user had it (capture used fitView).
-    if (options?.resetView) cameraActions.restore();
+    // Put the live camera back where the user had it (only the PDF path moved it
+    // via fitView; the cart/buy reset() path matches last night's behavior).
+    if (options?.resetView && options?.framed) cameraActions.restore();
   }
 }
 
@@ -2832,7 +2813,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
 
               const resolvedShopifyIds = resolveRuntimeShopifyIds(productId, variantId, appLayoutRef.current);
               const screenshotCaptureStartedAt = performance.now();
-              const screenshotBase64Promise = captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true, square: true })
+              const screenshotBase64Promise = captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true })
                 .then((image) => ({
                   image,
                   captureMs: Math.round(performance.now() - screenshotCaptureStartedAt),
@@ -2953,7 +2934,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
                     // memory pressure). One fresh attempt — the canvas has
                     // usually recovered by now.
                     DEBUG() && console.warn('[IMG] First capture failed — retrying once');
-                    screenshotBase64 = await captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true, square: true });
+                    screenshotBase64 = await captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true });
                   }
 
                   if (!screenshotBase64) {
@@ -3348,7 +3329,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
               const resolvedShopifyIds = resolveRuntimeShopifyIds(productId, variantId, appLayoutRef.current);
               DEBUG() && console.log('Resolved Shopify IDs for Buy Now:', resolvedShopifyIds);
 
-              const screenshotBase64Promise = captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true, square: true });
+              const screenshotBase64Promise = captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true });
 
               const payload = {
                 requestId,
@@ -3524,7 +3505,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
           <PdfPreviewModal
             open={pdfOpen}
             onClose={() => setPdfOpen(false)}
-            captureSnapshot={() => captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true })}
+            captureSnapshot={() => captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true, framed: true })}
           />
         </Suspense>
       )}
