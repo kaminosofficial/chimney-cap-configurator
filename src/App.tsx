@@ -778,59 +778,30 @@ function startPostOpenDrawerCatchUp(opts: {
   sectionIds: string[];
   expectedPriceText?: string;
   cartDataForEvents?: any;
-  // Sections we ALREADY validated pre-open (variant+price, maybe image). Re-injected
-  // in a fast burst right after open so the theme's stale on-open render (mobile's
-  // lazy drawer briefly paints $0 / the default image) is overwritten before it
-  // registers — no network, so no rate-limit cost.
-  seedSections?: Record<string, string> | null;
-  // When set, the catch-up keeps going until the drawer shows this image too (not
-  // just the variant), so a slow image render doesn't leave the default photo.
-  expectedImageUrl?: string | null;
 }) {
-  const { variantId, sectionIds, expectedPriceText, cartDataForEvents, seedSections, expectedImageUrl } = opts;
+  const { variantId, sectionIds, expectedPriceText, cartDataForEvents } = opts;
   if (!variantId || sectionIds.length === 0) return;
 
   const token = ++drawerCatchUpToken;
   const startedAt = Date.now();
   const MAX_MS = 45000;
-  const wantsImage = !!expectedImageUrl;
-  // With a seed in hand, check almost immediately and re-inject in a tight burst
-  // for the first ~1.8s so the stale frame is gone before it's perceptible. With
-  // no seed, keep the original gentle first-check (happy path costs nothing — the
-  // correctness check below exits before any fetch).
-  const FAST_TICK_MS = 150;
-  const FAST_PHASE_MS = 1800;
+  // First check soon after open (happy path costs nothing — the variant check
+  // below exits before any fetch); normal cadence afterwards; stretched when
+  // the storefront is rate-limiting us so we stop feeding the bot score.
+  const FIRST_TICK_MS = 700;
   const INTERVAL_MS = 2500;
   const THROTTLED_INTERVAL_MS = 5000;
   let attempts = 0;
   let nextDelay = INTERVAL_MS;
 
-  const drawerIsCorrect = () =>
-    cartUiContainsVariant(variantId)
-    && (!wantsImage || cartUiContainsExpectedImage(expectedImageUrl!));
-
   const tick = async () => {
     if (token !== drawerCatchUpToken) return; // superseded by a newer add
-    if (drawerIsCorrect()) {
-      DEBUG() && console.log(`[CART] Drawer correct (variant ${variantId}${wantsImage ? ' + image' : ''}) — catch-up done after ${attempts} poll(s)`);
+    if (cartUiContainsVariant(variantId)) {
+      DEBUG() && console.log(`[CART] Drawer shows variant ${variantId} — catch-up done after ${attempts} poll(s)`);
       return;
     }
     if (Date.now() - startedAt > MAX_MS) {
       emitCartDebug('post-open-catchup-exhausted', { variantId, attempts });
-      return;
-    }
-
-    // Fast burst: re-apply the sections we already hold (no fetch) to overwrite
-    // the theme's stale on-open render the instant the drawer DOM mounts.
-    if (seedSections && Date.now() - startedAt < FAST_PHASE_MS) {
-      if (isCartUiOpen()) {
-        applySectionUpdatesPreservingCartUi(seedSections, 'post-open-seed-burst');
-        if (drawerIsCorrect()) {
-          DEBUG() && console.log(`[CART] Drawer corrected from in-hand sections (${Math.round(Date.now() - startedAt)}ms)`);
-          return;
-        }
-      }
-      window.setTimeout(tick, FAST_TICK_MS);
       return;
     }
 
@@ -843,39 +814,31 @@ function startPostOpenDrawerCatchUp(opts: {
       } else {
         nextDelay = INTERVAL_MS;
       }
-      const expectedForSelect = { variantId, priceText: expectedPriceText, imageUrl: expectedImageUrl ?? undefined };
-      const selection = selectUsableRenderedSections(fetched.sections, expectedForSelect, { requireVariant: true });
+      const selection = selectUsableRenderedSections(
+        fetched.sections,
+        { variantId, priceText: expectedPriceText },
+        { requireVariant: true },
+      );
       const primaryReady = !!selection.usableSections
         && Object.keys(selection.usableSections).some(isPrimaryCartSectionId);
 
       if (token !== drawerCatchUpToken) return;
-      if (primaryReady) {
-        // Inject only when it actually improves the drawer: fix a missing
-        // variant/price, OR — once the variant is shown — bring the image in as
-        // soon as a fetched section carries it. Avoids re-injecting identical
-        // price-only HTML on every poll while the image is still propagating.
-        const needVariant = !cartUiContainsVariant(variantId);
-        const needImage = wantsImage && !needVariant && !cartUiContainsExpectedImage(expectedImageUrl!);
-        const fetchHasImage = needImage
-          && !!selectUsableRenderedSections(fetched.sections, expectedForSelect, { requireVariant: true, requireImage: true }).usableSections;
-        if (needVariant || fetchHasImage) {
-          applySectionUpdatesPreservingCartUi(selection.usableSections!, 'post-open-catchup');
-          dispatchCartSyncEvents(cartDataForEvents ?? null);
-          emitCartDebug('post-open-catchup-applied', {
-            variantId,
-            attempts,
-            ms: Date.now() - startedAt,
-            broughtImage: fetchHasImage,
-          });
-        }
-        if (drawerIsCorrect()) return;
+      if (primaryReady && !cartUiContainsVariant(variantId)) {
+        applySectionUpdatesPreservingCartUi(selection.usableSections!, 'post-open-catchup');
+        dispatchCartSyncEvents(cartDataForEvents ?? null);
+        emitCartDebug('post-open-catchup-applied', {
+          variantId,
+          attempts,
+          ms: Date.now() - startedAt,
+        });
+        return;
       }
     } catch { /* transient — keep polling */ }
 
     window.setTimeout(tick, nextDelay);
   };
 
-  window.setTimeout(tick, seedSections ? FAST_TICK_MS : 700);
+  window.setTimeout(tick, FIRST_TICK_MS);
 }
 
 function removeConfigurationOptionRows(root: ParentNode) {
@@ -3087,17 +3050,16 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 dom: collectCartDomSnapshot(),
               });
 
-              // Wait for the image upload to finish before opening, so the drawer
-              // opens WITH the configured screenshot instead of the default photo.
-              // This is a CEILING, not a fixed delay — it resolves the instant the
-              // upload completes. Mobile gets a longer ceiling (7s) because the
-              // staged upload + attach over a slow link routinely outruns a 3s
-              // window; when it did, we used to skip the image wait entirely and
-              // open with the default (the "no image for 3-4s" the client saw).
-              // For reused variants imageUploadPromise is Promise.resolve(null), so
-              // this resolves instantly. If the upload genuinely outruns the ceiling,
-              // we still open (default photo) and the post-open refresh swaps it in.
-              const imageReady = await waitForPromiseWithin(imageUploadPromise, isMobile() ? 7000 : 3000);
+              // Check if image upload finished during the retry loop, and give
+              // it a longer pre-open window (up to 3s) so the drawer is more
+              // likely to open WITH the exact config screenshot already in place.
+              // For reused variants that already have an image, imageUploadPromise
+              // is an already-resolved Promise.resolve(null), so this resolves
+              // instantly — the 3s ceiling only applies to genuine new-variant /
+              // reuse-heal uploads. A permanent featured product image (set via
+              // the cleanup dashboard) still covers the gap if the upload outruns
+              // this window: the cart line shows that default image, not a blank.
+              const imageReady = await waitForPromiseWithin(imageUploadPromise, 3000);
               const imageUrl: string | null = imageReady.resolved ? imageReady.value : null;
               let seededImageSections: Record<string, string> | null = null;
               if (imageUrl && drawerSectionIds.length > 0) {
@@ -3183,44 +3145,6 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 dom: collectCartDomSnapshot(),
               });
 
-              // Image-aware pre-open upgrade. The screenshot upload has finished
-              // (imageUrl known), but Shopify's rendered cart section can still
-              // carry the OLD/default image for a few seconds after the attach.
-              // Wait a BOUNDED extra window (~4s) for an image-bearing render so the
-              // drawer opens WITH the configured screenshot instead of flashing the
-              // default photo. The Phase-A sections are passed as a seed, so if they
-              // already contain the image this returns instantly (no added latency).
-              // Best-effort: on timeout/throttle we keep the current sections and the
-              // post-open refresh swaps the image in once Shopify catches up. Skipped
-              // when imageUrl is null (reused variants / still-pending uploads), so the
-              // fast path is unaffected.
-              if (imageUrl && expectedImageUrl && sectionReadiness.usableSections && drawerSectionIds.length > 0) {
-                const imageReadiness = await waitForUsableRenderedSections({
-                  sectionIds: drawerSectionIds,
-                  tag: 'CART-IMG-SECTIONS',
-                  expected: renderExpectation,
-                  requirements: { requireVariant: true, requireImage: true },
-                  // Wait for the image to land in the rendered section before open
-                  // (user accepted the small extra wait to avoid the default-photo
-                  // flash). Mobile gets more room for Shopify's render propagation.
-                  maxWaitMs: isMobile() ? 6000 : 4000,
-                  seedSections: [
-                    { source: 'image-preopen-seed', sections: sectionReadiness.usableSections },
-                  ],
-                });
-                if (imageReadiness.usableSections) {
-                  finalCartData = { ...finalCartData, sections: imageReadiness.usableSections };
-                  if (isCartUiOpen()) {
-                    applySectionUpdatesPreservingCartUi(imageReadiness.usableSections, 'pre-open-image');
-                  } else {
-                    applySectionUpdates(imageReadiness.usableSections);
-                  }
-                  DEBUG() && console.log('[IMG] Drawer will open WITH the configured image');
-                } else {
-                  DEBUG() && console.log('[IMG] Image not rendered in time — opening now; post-open refresh will swap it');
-                }
-              }
-
               if (!(typeof finalCartData?.item_count === 'number' && finalCartData.item_count > 0)) {
                 const { cart: confirmedCartData } = await fetchCartState('CART-BADGE');
                 if (confirmedCartData) {
@@ -3293,11 +3217,6 @@ export default function App({ productId, variantId }: AppProps = {}) {
                   sectionIds: drawerSectionIds,
                   expectedPriceText,
                   cartDataForEvents: finalCartData,
-                  // In-hand validated sections (variant+price, maybe image) for the
-                  // fast post-open burst; only seed when the pre-open gate succeeded.
-                  seedSections: sectionReadiness.usableSections ? (finalCartData?.sections ?? null) : null,
-                  // Keep correcting until the image shows too (when the upload is done).
-                  expectedImageUrl: imageUrl,
                 });
               } else {
                 dispatchCartSyncEvents(finalCartData);
