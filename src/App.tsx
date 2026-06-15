@@ -3133,6 +3133,41 @@ export default function App({ productId, variantId }: AppProps = {}) {
                 dom: collectCartDomSnapshot(),
               });
 
+              // Image-aware pre-open upgrade. The screenshot upload has finished
+              // (imageUrl known), but Shopify's rendered cart section can still
+              // carry the OLD/default image for a few seconds after the attach.
+              // Wait a BOUNDED extra window (~4s) for an image-bearing render so the
+              // drawer opens WITH the configured screenshot instead of flashing the
+              // default photo. The Phase-A sections are passed as a seed, so if they
+              // already contain the image this returns instantly (no added latency).
+              // Best-effort: on timeout/throttle we keep the current sections and the
+              // post-open refresh swaps the image in once Shopify catches up. Skipped
+              // when imageUrl is null (reused variants / still-pending uploads), so the
+              // fast path is unaffected.
+              if (imageUrl && expectedImageUrl && sectionReadiness.usableSections && drawerSectionIds.length > 0) {
+                const imageReadiness = await waitForUsableRenderedSections({
+                  sectionIds: drawerSectionIds,
+                  tag: 'CART-IMG-SECTIONS',
+                  expected: renderExpectation,
+                  requirements: { requireVariant: true, requireImage: true },
+                  maxWaitMs: 4000,
+                  seedSections: [
+                    { source: 'image-preopen-seed', sections: sectionReadiness.usableSections },
+                  ],
+                });
+                if (imageReadiness.usableSections) {
+                  finalCartData = { ...finalCartData, sections: imageReadiness.usableSections };
+                  if (isCartUiOpen()) {
+                    applySectionUpdatesPreservingCartUi(imageReadiness.usableSections, 'pre-open-image');
+                  } else {
+                    applySectionUpdates(imageReadiness.usableSections);
+                  }
+                  DEBUG() && console.log('[IMG] Drawer will open WITH the configured image');
+                } else {
+                  DEBUG() && console.log('[IMG] Image not rendered in time — opening now; post-open refresh will swap it');
+                }
+              }
+
               if (!(typeof finalCartData?.item_count === 'number' && finalCartData.item_count > 0)) {
                 const { cart: confirmedCartData } = await fetchCartState('CART-BADGE');
                 if (confirmedCartData) {

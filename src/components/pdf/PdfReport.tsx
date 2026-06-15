@@ -189,7 +189,9 @@ export function PdfReport({ snapshotUrl }: PdfReportProps) {
           display: 'flex',
           flexDirection: 'row',
           gap: '60px',
-          alignItems: 'flex-start',
+          // stretch (not flex-start) so the right column fills the page height and
+          // the pricing card's marginTop:auto pins it to the bottom-right corner.
+          alignItems: 'stretch',
         }}
       >
         {/* Left column */}
