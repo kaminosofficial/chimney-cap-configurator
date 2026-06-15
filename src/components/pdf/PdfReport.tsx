@@ -75,8 +75,8 @@ export function PdfReport({ snapshotUrl }: PdfReportProps) {
   // images to fill their box. To prevent squishing we size the hero with an
   // explicit width AND height that preserve the image's TRUE aspect ratio,
   // bounded by a max box. Measured on load.
-  const HERO_MAX_W = 440;
-  const HERO_MAX_H = 230;
+  const HERO_MAX_W = 640;
+  const HERO_MAX_H = 350;
   const [heroDims, setHeroDims] = useState<{ w: number; h: number } | null>(null);
   function onHeroLoad(e: React.SyntheticEvent<HTMLImageElement>) {
     const img = e.currentTarget;
@@ -153,7 +153,7 @@ export function PdfReport({ snapshotUrl }: PdfReportProps) {
       <div
         style={{
           flexShrink: 0,
-          padding: '24px 53px 16px',
+          padding: '8px 53px 8px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',

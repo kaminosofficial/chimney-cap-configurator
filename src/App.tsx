@@ -1521,8 +1521,15 @@ async function waitForUsableRenderedSections(opts: {
  * WebGL canvases have transparency â€” compositing onto white prevents black artifacts.
  */
 function waitForNextFrame() {
+  // Resolve on the next animation frame OR after a short timer, whichever fires
+  // first. requestAnimationFrame is throttled/suspended when the tab is
+  // backgrounded — without the timer fallback the screenshot capture (which
+  // awaits this) would hang indefinitely if the user switches tabs mid-export.
   return new Promise<void>((resolve) => {
-    window.requestAnimationFrame(() => resolve());
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    window.requestAnimationFrame(finish);
+    window.setTimeout(finish, 150);
   });
 }
 
@@ -1543,33 +1550,28 @@ async function waitForPromiseWithin<T>(promise: Promise<T>, timeoutMs: number): 
   }
 }
 
-// Trim the surrounding white/transparent margin from a captured canvas so the
-// PDF hero render is tightly cropped to the model (used by the PDF export only).
-function cropWhitespace(canvas: HTMLCanvasElement): HTMLCanvasElement {
+// Trims the empty white border around the rendered model on a white-composited
+// canvas, returning a tightly-cropped canvas so the product fills the frame
+// (a flat/wide model otherwise leaves large margins in the square-ish viewport,
+// which then show as whitespace in the cart image + PDF hero). Scans for the
+// non-white content bounds, pads slightly, and redraws onto a new white canvas.
+// Returns the original on any failure or if there's nothing to trim.
+function cropCanvasToContent(src: HTMLCanvasElement, padFrac = 0.05): HTMLCanvasElement {
   try {
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return canvas;
-    const width = canvas.width;
-    const height = canvas.height;
-    const imgData = ctx.getImageData(0, 0, width, height);
-    const data = imgData.data;
-
-    let minX = width;
-    let maxX = 0;
-    let minY = height;
-    let maxY = 0;
-    let found = false;
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const idx = (y * width + x) * 4;
-        const r = data[idx];
-        const g = data[idx + 1];
-        const b = data[idx + 2];
-        const a = data[idx + 3];
-
-        if (a > 10 && (r < 250 || g < 250 || b < 250)) {
-          found = true;
+    const ctx = src.getContext('2d');
+    if (!ctx) return src;
+    const w = src.width;
+    const h = src.height;
+    if (!w || !h) return src;
+    const { data } = ctx.getImageData(0, 0, w, h);
+    const T = 247; // pixels with R,G,B all >= T are treated as background white
+    const step = Math.max(1, Math.round(Math.min(w, h) / 600)); // subsample big canvases
+    let minX = w, minY = h, maxX = -1, maxY = -1;
+    for (let y = 0; y < h; y += step) {
+      const row = y * w;
+      for (let x = 0; x < w; x += step) {
+        const i = (row + x) * 4;
+        if (data[i] < T || data[i + 1] < T || data[i + 2] < T) {
           if (x < minX) minX = x;
           if (x > maxX) maxX = x;
           if (y < minY) minY = y;
@@ -1577,43 +1579,100 @@ function cropWhitespace(canvas: HTMLCanvasElement): HTMLCanvasElement {
         }
       }
     }
-
-    if (!found) return canvas;
-
-    const padding = 24;
-    const cropX = Math.max(0, minX - padding);
-    const cropY = Math.max(0, minY - padding);
-    const cropW = Math.min(width - cropX, (maxX - minX) + padding * 2);
-    const cropH = Math.min(height - cropY, (maxY - minY) + padding * 2);
-
-    const croppedCanvas = document.createElement('canvas');
-    croppedCanvas.width = cropW;
-    croppedCanvas.height = cropH;
-    const croppedCtx = croppedCanvas.getContext('2d');
-    if (!croppedCtx) return canvas;
-
-    croppedCtx.fillStyle = '#ffffff';
-    croppedCtx.fillRect(0, 0, cropW, cropH);
-    croppedCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-
-    return croppedCanvas;
-  } catch (e) {
-    console.warn('[CROP] Failed to crop whitespace:', e);
-    return canvas;
+    if (maxX < minX || maxY < minY) return src; // entirely white → nothing to crop
+    const padX = Math.round((maxX - minX) * padFrac);
+    const padY = Math.round((maxY - minY) * padFrac);
+    minX = Math.max(0, minX - padX);
+    minY = Math.max(0, minY - padY);
+    maxX = Math.min(w - 1, maxX + padX);
+    maxY = Math.min(h - 1, maxY + padY);
+    const cw = maxX - minX + 1;
+    const ch = maxY - minY + 1;
+    if (cw >= w && ch >= h) return src; // already tight
+    const out = document.createElement('canvas');
+    out.width = cw;
+    out.height = ch;
+    const octx = out.getContext('2d');
+    if (!octx) return src;
+    octx.fillStyle = '#ffffff';
+    octx.fillRect(0, 0, cw, ch);
+    octx.drawImage(src, minX, minY, cw, ch, 0, 0, cw, ch);
+    return out;
+  } catch {
+    return src;
   }
+}
+
+// Expands a canvas to a centered SQUARE on white (no scaling). Used for the cart
+// thumbnail: Shopify cover-crops the variant image into a square tile, so a wide
+// (tightly-cropped) image would lose its sides. Padding the model to a square
+// first means the whole product stays visible and every variant frames the same.
+function padCanvasToSquare(src: HTMLCanvasElement): HTMLCanvasElement {
+  try {
+    const w = src.width;
+    const h = src.height;
+    if (!w || !h || w === h) return src;
+    const side = Math.max(w, h);
+    const out = document.createElement('canvas');
+    out.width = side;
+    out.height = side;
+    const ctx = out.getContext('2d');
+    if (!ctx) return src;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, side, side);
+    ctx.drawImage(src, Math.round((side - w) / 2), Math.round((side - h) / 2));
+    return out;
+  } catch {
+    return src;
+  }
+}
+
+// Encodes a canvas to a JPEG data URL guaranteed under the variant-image upload
+// limit (~525KB / ~700k base64 chars): first downscale very large captures (a
+// high-DPR 3D canvas can be 1600px+), then step quality down if still over.
+// Without this a big, detailed render (e.g. a 90"x90" model on a Retina screen)
+// can 413 at /api/variant-image — which isn't retried — leaving the variant
+// imageless (cart falls back to the default product photo).
+function canvasToJpegUnderLimit(src: HTMLCanvasElement, maxBase64 = 680000): string {
+  let canvas = src;
+  const MAX_DIM = 1400;
+  const big = Math.max(src.width, src.height);
+  if (big > MAX_DIM) {
+    try {
+      const scale = MAX_DIM / big;
+      const sc = document.createElement('canvas');
+      sc.width = Math.max(1, Math.round(src.width * scale));
+      sc.height = Math.max(1, Math.round(src.height * scale));
+      const sctx = sc.getContext('2d');
+      if (sctx) {
+        sctx.fillStyle = '#ffffff';
+        sctx.fillRect(0, 0, sc.width, sc.height);
+        sctx.drawImage(src, 0, 0, sc.width, sc.height);
+        canvas = sc;
+      }
+    } catch { /* fall back to the original canvas */ }
+  }
+  let q = 0.85;
+  let data = canvas.toDataURL('image/jpeg', q);
+  while (data.length > maxBase64 && q > 0.5) {
+    q = Math.round((q - 0.12) * 100) / 100;
+    data = canvas.toDataURL('image/jpeg', q);
+  }
+  return data;
 }
 
 async function captureCanvasScreenshot(
   appLayoutRef: React.RefObject<HTMLDivElement | null>,
-  options?: { resetView?: boolean; hideLabels?: boolean; cropToContent?: boolean }
+  options?: { resetView?: boolean; hideLabels?: boolean; square?: boolean }
 ): Promise<string | undefined> {
-
-
-
   try {
-
     if (options?.resetView) {
-      cameraActions.reset();
+      // Save the user's current camera so it can be restored after the capture —
+      // otherwise the live viewer is left "stuck" at the fit pose after export.
+      cameraActions.snapshot();
+      // Frame the camera to the product's bounding box so it's a consistent size
+      // and fully visible in every capture (cart image + PDF), regardless of dims.
+      cameraActions.fitView();
       // Let OrbitControls and the canvas render settle before grabbing the image.
       await waitForNextFrame();
       await waitForNextFrame();
@@ -1639,8 +1698,12 @@ async function captureCanvasScreenshot(
         ctx2d.fillStyle = '#ffffff';
         ctx2d.fillRect(0, 0, tmp.width, tmp.height);
         ctx2d.drawImage(canvasEl, 0, 0);
-        const out = options?.cropToContent ? cropWhitespace(tmp) : tmp;
-        result = out.toDataURL('image/jpeg', 0.85);
+        // Trim the empty white border so the product fills the frame (cart + PDF).
+        let outCanvas = cropCanvasToContent(tmp);
+        // Cart thumbnail (square): pad to a square so Shopify's cover-cropped
+        // square tile shows the WHOLE model; the PDF keeps the tight crop.
+        if (options?.square) outCanvas = padCanvasToSquare(outCanvas);
+        result = canvasToJpegUnderLimit(outCanvas);
       } else {
         result = canvasEl.toDataURL('image/jpeg', 0.85);
       }
@@ -1652,6 +1715,9 @@ async function captureCanvasScreenshot(
     return result;
   } catch {
     return undefined;
+  } finally {
+    // Put the live camera back where the user had it (capture used fitView).
+    if (options?.resetView) cameraActions.restore();
   }
 }
 
@@ -2754,7 +2820,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
 
               const resolvedShopifyIds = resolveRuntimeShopifyIds(productId, variantId, appLayoutRef.current);
               const screenshotCaptureStartedAt = performance.now();
-              const screenshotBase64Promise = captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true })
+              const screenshotBase64Promise = captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true, square: true })
                 .then((image) => ({
                   image,
                   captureMs: Math.round(performance.now() - screenshotCaptureStartedAt),
@@ -2875,7 +2941,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
                     // memory pressure). One fresh attempt — the canvas has
                     // usually recovered by now.
                     DEBUG() && console.warn('[IMG] First capture failed — retrying once');
-                    screenshotBase64 = await captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true });
+                    screenshotBase64 = await captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true, square: true });
                   }
 
                   if (!screenshotBase64) {
@@ -3269,7 +3335,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
               const resolvedShopifyIds = resolveRuntimeShopifyIds(productId, variantId, appLayoutRef.current);
               DEBUG() && console.log('Resolved Shopify IDs for Buy Now:', resolvedShopifyIds);
 
-              const screenshotBase64Promise = captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true });
+              const screenshotBase64Promise = captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true, square: true });
 
               const payload = {
                 requestId,
@@ -3444,7 +3510,7 @@ export default function App({ productId, variantId }: AppProps = {}) {
           <PdfPreviewModal
             open={pdfOpen}
             onClose={() => setPdfOpen(false)}
-            captureSnapshot={() => captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true, cropToContent: true })}
+            captureSnapshot={() => captureCanvasScreenshot(appLayoutRef, { resetView: true, hideLabels: true })}
           />
         </Suspense>
       )}
