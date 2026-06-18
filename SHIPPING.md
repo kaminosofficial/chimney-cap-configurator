@@ -56,17 +56,17 @@ another." The check does **not** deploy — it only verifies.
 
 ## Preview links — per repo
 
-- **Chase cover** (`chase-cover-configurator`): connected to Vercel's GitHub app,
-  so **every branch/PR gets an automatic preview URL** (Vercel posts it as a
-  comment on the PR). Merging to `main` deploys to production automatically.
-- **Chimney cap** (`chimney-cap-configurator`): the Vercel GitHub app is **not
-  connected yet**, so previews are not automatic. Two options:
-  - **Quick:** ask Claude to run `vercel deploy` (without `--prod`) — it prints a
-    private preview URL built from the current code.
-  - **Better (one-time):** connect the Vercel GitHub app to this repo in the
-    Vercel dashboard so cap behaves exactly like chase.
+**Both** repos are connected to Vercel's GitHub app, so **every branch/PR gets an
+automatic preview URL** (Vercel posts it as a comment on the PR). Open that link
+to test your change for real before merging.
 
-  *Recommended: wire cap up like chase so both repos behave the same.*
+Production deploys differ:
+- **Chase cover** (`chase-cover-configurator`): merging to `main` deploys to
+  production automatically.
+- **Chimney cap** (`chimney-cap-configurator`): production has historically been
+  a manual step (`vercel deploy --prod --scope kaminos-official-s-projects`).
+  Confirm in the Vercel dashboard whether merging to `main` now auto-deploys; if
+  not, wire it up so cap behaves exactly like chase.
 
 ---
 
