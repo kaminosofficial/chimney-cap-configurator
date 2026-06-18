@@ -1,0 +1,30 @@
+name: CI
+
+# Runs on every Pull Request and every push to main.
+# It is a CHECK only — it does not deploy anything.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# If you push again before the previous run finishes, cancel the old one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Type-check & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      # `build:vercel` runs `tsc -b` (full type-check) + both production bundles.
+      # Green = it compiles and bundles cleanly. Red = something is broken.
+      - name: Type-check & production build
+        run: npm run build:vercel
