@@ -422,8 +422,10 @@ export function buildCap(capRoot: THREE.Group, config: CapConfig) {
   topRailFinal.castShadow = true;
   screenCageGroup.add(topRailFinal);
 
-  // Mesh Panels - color matches cap material
-  const scrColor = config.material === 'copper' ? '#c48a5a' : '#888888';
+  // Mesh Panels (the screen/net) — always render steel grey, independent of the
+  // cap material. This matches the existing powder-coat behavior (the net stays
+  // grey while the cap takes the chosen finish), so copper no longer tints the net.
+  const scrColor = '#888888';
   const scrMat = new THREE.MeshStandardMaterial({
     color: scrColor,
     metalness: 0.7,
