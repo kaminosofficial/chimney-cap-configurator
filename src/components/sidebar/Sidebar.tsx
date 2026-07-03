@@ -44,8 +44,8 @@ export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, onExportPdf, isSubmi
               <span className="section-title-label">Skirt</span>
             </div>
             <div className="field-row-3">
-              <NumInput configKey="vertical_skirt" label="Vertical Skirt" unit="in" max={9} min={1} step={0.25} />
-              <NumInput configKey="horizontal_skirt" label="Horizontal Skirt" unit="in" max={9} min={1} step={0.25} />
+              <NumInput configKey="vertical_skirt" label="Vertical Skirt" unit="in" max={9} min={1} step={0.125} />
+              <NumInput configKey="horizontal_skirt" label="Horizontal Skirt" unit="in" max={9} min={1} step={0.125} />
             </div>
             <ToggleRow id="drip_edge" label="Drip Edge" tooltip="A drip edge extends beyond the skirt at a 45-degree angle, directing rainwater away from the chase to prevent water damage." />
           </div>
@@ -57,7 +57,7 @@ export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, onExportPdf, isSubmi
               <span className="section-title-label">Top-Mount Flange</span>
             </div>
             <div className="field-row-3">
-              <NumInput configKey="flange_width" label="Flange Width" unit="in" max={6} min={1} step={0.25} />
+              <NumInput configKey="flange_width" label="Flange Width" unit="in" max={6} min={1} step={0.125} />
             </div>
           </div>
         )}
@@ -67,7 +67,7 @@ export function Sidebar({ onOpenRal, onAddToCart, onBuyNow, onExportPdf, isSubmi
             <span className="section-title-label">Lid Settings</span>
           </div>
           <div className="field-row-3">
-            <NumInput configKey="lid_overhang" label="Lid Overhang" unit="in" max={6} min={2} step={0.5} />
+            <NumInput configKey="lid_overhang" label="Lid Overhang" unit="in" max={6} min={2} step={0.125} />
             {config.lid_type !== 'flat' ? (
               <NumInput configKey="lid_pitch" label="Lid Pitch" unit="n/12" max={10} min={1} step={1} />
             ) : (
