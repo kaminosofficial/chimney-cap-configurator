@@ -26,7 +26,7 @@ export function NumInput({ configKey, label, unit, max = 120, min = 1, step = 0.
   function commit() {
     setFocused(false);
     let raw = parseFloat(inputVal) || 0;
-    raw = Math.round(raw / step) * step;
+    raw = Math.ceil(raw / step) * step;
     const clamped = Math.max(min, Math.min(max, raw));
     setInputVal(clamped.toString());
     config.set({ [configKey]: clamped });
