@@ -168,7 +168,7 @@ export function ScreenSection() {
         </button>
       </div>
       {isCustom && (
-        <NumInput configKey="screen_height" label="Custom Height" unit="in" min={4} max={48} step={1} />
+        <NumInput configKey="screen_height" label="Custom Height" unit="in" min={4} max={48} step={0.125} />
       )}
     </div>
   );
